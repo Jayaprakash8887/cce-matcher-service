@@ -404,7 +404,7 @@ psql -U cce_user -h postgres-host -p 5433 ccedb < backup_20250101.sql
 | Problem | Possible Cause | Resolution |
 |---|---|---|
 | Service won't start | Database unreachable | Check `DB_HOST`, `DB_PORT`, network connectivity |
-| Flyway migration fails | Schema already exists | Check `baseline-on-migrate` setting |
+| Flyway migration fails | Schema already exists | V1 is greenfield-only: `baseline-version` is `0`, so Flyway baselines at 0 and still applies V1, which fails on existing tables. Confirm the target `ccedb` is empty |
 | No events processed | Kafka unreachable | Check `KAFKA_BOOTSTRAP_SERVERS`, broker health |
 | Events going to DLQ | Deserialization errors | Check message format matches CloudEvents schema |
 | High consumer lag | Slow processing | Increase `KAFKA_CONCURRENCY`, check DB performance |

@@ -124,7 +124,7 @@ Configured via `cce.kafka.topics.*` in `application.yml`:
 |---|---|---|
 | `spring.flyway.enabled` | `true` | Auto-apply migrations on startup |
 | `spring.flyway.locations` | `classpath:db/migration` | Migration file location |
-| `spring.flyway.baseline-on-migrate` | `true` | Baseline existing DBs on first run |
+| `spring.flyway.baseline-on-migrate` | `true` | Creates the history table on first run. Note `baseline-version` is `0`, so V1 is still applied afterwards — this does **not** make V1 safe against an existing schema |
 | `spring.flyway.table` | `flyway_schema_history_matcher` | Namespaced history table so each CCE service tracks its own migrations in the shared database |
 
 ### 3.5 Observability
