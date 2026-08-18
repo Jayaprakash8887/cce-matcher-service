@@ -1,0 +1,141 @@
+{
+  "resourceType": "PlanDefinition",
+  "id": "anc-intelligence-integration",
+  "url": "http://openphc.org/PlanDefinition/anc-intelligence-integration",
+  "version": "1.0.0",
+  "name": "ANCIntelligenceIntegration",
+  "title": "ANC Protocol with Intelligence Actions (Integration Test)",
+  "status": "active",
+  "action": [
+    {
+      "id": "encounter-step",
+      "title": "Encounter Step with Intelligence Actions",
+      "description": "Triggers on any Encounter. completion-alert fires on step completion (evaluated here); the deviation-keyed actions are evaluated by the SLA transition service.",
+      "trigger": [
+        {
+          "type": "named-event",
+          "name": "encounter-trigger",
+          "data": [
+            {
+              "type": "Encounter"
+            }
+          ]
+        }
+      ],
+      "timingTiming": {
+        "repeat": {
+          "count": 1,
+          "frequency": 1,
+          "period": 1,
+          "periodUnit": "d"
+        }
+      },
+      "action": [
+        {
+          "id": "completion-alert",
+          "title": "Step Completion Alert",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "condition": [
+            {
+              "kind": "applicability",
+              "expression": {
+                "language": "text/jsonlogic",
+                "expression": "{\"==\": [{\"var\": \"event.stepStatus\"}, \"completed\"]}"
+              }
+            }
+          ],
+          "definitionCanonical": "http://openphc.org/ActivityDefinition/escalation-alert|1.0.0",
+          "extension": [
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-severity",
+              "valueCode": "LOW"
+            },
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-destination",
+              "valueCode": "ASSIGNED_WORKER"
+            }
+          ]
+        },
+        {
+          "id": "overdue-escalation",
+          "title": "Overdue Escalation Alert",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "condition": [
+            {
+              "kind": "applicability",
+              "expression": {
+                "language": "text/jsonlogic",
+                "expression": "{\"==\": [{\"var\": \"event.deviationType\"}, \"overdue\"]}"
+              }
+            }
+          ],
+          "definitionCanonical": "http://openphc.org/ActivityDefinition/escalation-alert|1.0.0",
+          "extension": [
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-severity",
+              "valueCode": "HIGH"
+            },
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-destination",
+              "valueCode": "ASSIGNED_WORKER"
+            }
+          ]
+        },
+        {
+          "id": "missed-critical-alert",
+          "title": "Missed Step Critical Alert",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "condition": [
+            {
+              "kind": "applicability",
+              "expression": {
+                "language": "text/jsonlogic",
+                "expression": "{\"==\": [{\"var\": \"event.deviationType\"}, \"missed\"]}"
+              }
+            }
+          ],
+          "definitionCanonical": "http://openphc.org/ActivityDefinition/escalation-alert|1.0.0",
+          "extension": [
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-severity",
+              "valueCode": "CRITICAL"
+            },
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-destination",
+              "valueCode": "SUPERVISOR"
+            }
+          ]
+        }
+      ],
+      "type": {
+        "coding": [
+          {
+            "system": "http://openphc.org/fhir/CodeSystem/action-type",
+            "code": "step"
+          }
+        ]
+      }
+    }
+  ]
+}

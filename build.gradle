@@ -1,0 +1,147 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.4.2'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'jacoco'
+}
+
+group = 'org.openphc.cce'
+version = '2.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+// ==============================================================================
+// Integration Test Source Set
+// ==============================================================================
+sourceSets {
+    integrationTest {
+        java.srcDir 'src/integrationTest/java'
+        resources.srcDir 'src/integrationTest/resources'
+        compileClasspath += sourceSets.main.output + sourceSets.test.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output
+    }
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+    integrationTestImplementation.extendsFrom testImplementation
+    integrationTestRuntimeOnly.extendsFrom testRuntimeOnly
+    integrationTestCompileOnly.extendsFrom testCompileOnly
+    integrationTestAnnotationProcessor.extendsFrom testAnnotationProcessor
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    johnzonVersion = '2.0.2'
+    hapiVersion = '7.6.0'
+}
+
+dependencies {
+    // Shared vocabulary, Kafka contracts and FHIR parsing/evaluation.
+    implementation 'org.openphc.cce:cce-common-util'
+
+    // Spring Boot starters.
+    // starter-web carries no REST API of its own — protocol and action-definition management is served
+    // by a separate service. It is retained so actuator can expose /actuator/health (the container
+    // HEALTHCHECK and Kubernetes probes) and /actuator/prometheus.
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.kafka:spring-kafka'
+
+    // Database
+    runtimeOnly 'org.postgresql:postgresql'
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
+
+    // FHIR
+    implementation "ca.uhn.hapi.fhir:hapi-fhir-base:${hapiVersion}"
+    implementation "ca.uhn.hapi.fhir:hapi-fhir-structures-r4:${hapiVersion}"
+    // Neither of the next two is referenced from source, but both are required at runtime — do not
+    // remove as "unused". FhirContext needs a hapi-fhir-caching-* module for its internal caches,
+    // and HAPI's FHIRPath engine loads org.fhir.ucum classes eagerly (NoClassDefFoundError without).
+    implementation "ca.uhn.hapi.fhir:hapi-fhir-caching-caffeine:${hapiVersion}"
+    implementation 'org.fhir:ucum:1.0.8'
+
+    // Expression evaluation
+    implementation "org.apache.johnzon:johnzon-jsonlogic:${johnzonVersion}"
+    implementation "org.apache.johnzon:johnzon-core:${johnzonVersion}"
+    implementation 'jakarta.json:jakarta.json-api:2.1.3'
+
+    // Observability
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // Testing
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.kafka:spring-kafka-test'
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
+
+    integrationTestRuntimeOnly 'com.h2database:h2'
+    integrationTestImplementation 'org.awaitility:awaitility:4.2.2'
+}
+
+tasks.named('processIntegrationTestResources') {
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register('integrationTest', Test) {
+    description = 'Runs integration tests with EmbeddedKafka and H2.'
+    group = 'verification'
+    testClassesDirs = sourceSets.integrationTest.output.classesDirs
+    classpath = sourceSets.integrationTest.runtimeClasspath
+    useJUnitPlatform()
+    shouldRunAfter tasks.named('test')
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+// Without this, `./gradlew build` (and therefore CI) silently skips every integration test.
+tasks.named('check') {
+    dependsOn tasks.named('integrationTest')
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+// Held just under the measured level so an uncovered addition fails the build rather than quietly
+// eroding the floor.
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    violationRules {
+        rule {
+            // The application class is a bootstrap shim with nothing to assert; covering it would only
+            // mean starting a full context for the sake of the counter.
+            excludes = ['org.openphc.cce.matcher.MatcherServiceApplication']
+            limit {
+                counter = 'INSTRUCTION'
+                value = 'COVEREDRATIO'
+                minimum = 0.97
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('jacocoTestCoverageVerification')
+}

@@ -1,0 +1,71 @@
+# ==============================================================================
+# CCE Matcher Service — Integration Test Configuration
+# ==============================================================================
+# H2 in-memory (PostgreSQL mode) + EmbeddedKafka — no Docker required.
+
+spring:
+  application:
+    name: cce-matcher-service-integration
+
+  # --- H2 in-memory with PostgreSQL compatibility ---
+  datasource:
+    url: jdbc:h2:mem:cce_test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  flyway:
+    enabled: false
+
+  kafka:
+    listener:
+      ack-mode: record
+      concurrency: 1
+    consumer:
+      group-id: cce-matcher-integration-test
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        max.poll.records: 10
+    producer:
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: false
+        max.in.flight.requests.per.connection: 5
+
+cce:
+  kafka:
+    topics:
+      inbound-events: cce.events.inbound
+      intelligence-triggers: cce.intelligence.triggers
+      default-partitions: 1
+    retry:
+      max-attempts: 1
+      backoff-interval-ms: 100
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+
+logging:
+  level:
+    root: WARN
+    org.openphc.cce.matcher: INFO
+    org.springframework.kafka: WARN

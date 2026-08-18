@@ -1,0 +1,66 @@
+# ==============================================================================
+# CCE Matcher Service — Production Profile
+# ==============================================================================
+# Activate with: SPRING_PROFILES_ACTIVE=prod
+# or: java -jar app.jar --spring.profiles.active=prod
+
+spring:
+  # --- DataSource (production-tuned HikariCP) ---
+  datasource:
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:30}
+      minimum-idle: ${DB_POOL_MIN_IDLE:10}
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      leak-detection-threshold: 60000
+
+  # --- JPA ---
+  jpa:
+    properties:
+      hibernate:
+        jdbc:
+          batch_size: 25
+          fetch_size: 50
+        order_inserts: true
+        order_updates: true
+        generate_statistics: false
+
+  # --- Flyway ---
+  flyway:
+    baseline-on-migrate: false
+    out-of-order: false
+
+  # --- Kafka Consumer (production-tuned) ---
+  kafka:
+    listener:
+      concurrency: ${KAFKA_CONCURRENCY:5}
+    consumer:
+      properties:
+        max.poll.records: 200
+        fetch.min.bytes: 1024
+        fetch.max.wait.ms: 500
+    producer:
+      properties:
+        batch.size: 32768
+        linger.ms: 10
+        buffer.memory: 67108864
+
+# --- Custom Kafka Topics (production partitioning) ---
+cce:
+  kafka:
+    topics:
+      default-partitions: ${KAFKA_PARTITIONS:25}
+    retry:
+      max-attempts: ${KAFKA_RETRY_MAX_ATTEMPTS:5}
+      backoff-interval-ms: ${KAFKA_RETRY_BACKOFF_MS:2000}
+
+# --- Logging (production — reduced verbosity) ---
+logging:
+  level:
+    root: WARN
+    org.apache.kafka: ERROR
+    org.hibernate: ERROR
+    org.hibernate.SQL: WARN
+    org.springframework: WARN
+    org.openphc.cce.matcher: INFO

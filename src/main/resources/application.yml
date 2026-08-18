@@ -1,0 +1,107 @@
+# ==============================================================================
+# CCE Matcher Service — Application Configuration
+# ==============================================================================
+
+server:
+  port: ${SERVER_PORT:8091}
+
+spring:
+  application:
+    name: cce-matcher-service
+
+  # --- DataSource ---
+  # Connects to shared PostgreSQL + database deployed by cce-collector-service (port 5433)
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:ccedb}
+    username: ${DB_USERNAME:cce_user}
+    password: ${DB_PASSWORD:cce_pass}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:20}
+      minimum-idle: ${DB_POOL_MIN_IDLE:5}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT:30000}
+      idle-timeout: ${DB_IDLE_TIMEOUT:600000}
+      max-lifetime: ${DB_MAX_LIFETIME:1800000}
+
+  # --- JPA / Hibernate ---
+  jpa:
+    hibernate:
+      ddl-auto: none
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  # --- Flyway ---
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+    baseline-version: 0
+    out-of-order: true
+    table: flyway_schema_history_matcher
+
+  # --- Kafka Consumer ---
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    listener:
+      ack-mode: record
+      concurrency: 3
+    consumer:
+      group-id: cce-matcher-service
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      properties:
+        isolation.level: read_committed
+        max.poll.records: 100
+        max.poll.interval.ms: 300000
+    producer:
+      acks: all
+      retries: 3
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
+
+# --- Custom Kafka Topics ---
+cce:
+  kafka:
+    topics:
+      inbound-events: cce.events.inbound
+      intelligence-triggers: cce.intelligence.triggers
+      default-partitions: 25
+    retry:
+      max-attempts: 3
+      backoff-interval-ms: 1000
+  protocol:
+    # Parsed protocol definitions (flattened steps + dependency graph) held in memory
+    parsed-cache-size: ${CCE_PARSED_PROTOCOL_CACHE_SIZE:256}
+    # How often to reconcile the derived caches against definitions written by the
+    # protocol-management service. This is the upper bound on how long a newly published protocol
+    # takes to start matching its condition-only triggers, and on how long a retired one keeps doing so.
+    refresh-interval-ms: ${CCE_PROTOCOL_REFRESH_INTERVAL_MS:60000}
+  intelligence:
+    # How long to wait for Kafka to acknowledge an intelligence trigger before recording it unpublished
+    publish-confirm-timeout-ms: ${CCE_PUBLISH_CONFIRM_TIMEOUT_MS:5000}
+
+# --- Actuator ---
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: cce-matcher-service
+
+# --- Logging ---
+logging:
+  level:
+    root: INFO
+    org.apache.kafka: WARN
+    org.hibernate: WARN
+    org.openphc.cce.matcher: INFO

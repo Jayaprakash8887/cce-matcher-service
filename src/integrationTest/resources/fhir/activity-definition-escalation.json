@@ -1,0 +1,21 @@
+{
+  "resourceType": "ActivityDefinition",
+  "id": "escalation-alert",
+  "url": "http://openphc.org/ActivityDefinition/escalation-alert",
+  "version": "1.0.0",
+  "name": "EscalationAlert",
+  "title": "Escalation Alert Action",
+  "status": "active",
+  "kind": "CommunicationRequest",
+  "description": "Generates an escalation alert when a step is overdue or missed.",
+  "extension": [
+    {
+      "url": "http://openphc.org/fhir/StructureDefinition/intelligence-severity",
+      "valueCode": "HIGH"
+    },
+    {
+      "url": "http://openphc.org/fhir/StructureDefinition/intelligence-destination",
+      "valueCode": "ASSIGNED_WORKER"
+    }
+  ]
+}

@@ -1,0 +1,225 @@
+{
+  "resourceType": "PlanDefinition",
+  "id": "anc-intelligence-actions",
+  "url": "http://openphc.org/PlanDefinition/anc-intelligence-actions",
+  "version": "1.0.0",
+  "name": "ANCIntelligenceActionsProtocol",
+  "title": "ANC Protocol with Intelligence Actions",
+  "status": "active",
+  "action": [
+    {
+      "id": "blood-pressure-check",
+      "title": "Blood Pressure Check",
+      "trigger": [
+        {
+          "type": "named-event",
+          "name": "bp-trigger",
+          "data": [
+            {
+              "type": "Observation",
+              "codeFilter": [
+                {
+                  "path": "code",
+                  "code": [
+                    {
+                      "system": "http://loinc.org",
+                      "code": "85354-9"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "action": [
+        {
+          "id": "bp-high-alert",
+          "title": "High BP Alert Action",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "condition": [
+            {
+              "kind": "applicability",
+              "expression": {
+                "language": "text/jsonlogic",
+                "expression": "{\">\": [{\"var\": \"systolic\"}, 140]}"
+              }
+            }
+          ],
+          "definitionCanonical": "http://openphc.org/ActivityDefinition/high-bp-alert|1.0.0",
+          "extension": [
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-severity",
+              "valueCode": "HIGH"
+            },
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-destination",
+              "valueCode": "ASSIGNED_WORKER"
+            }
+          ]
+        },
+        {
+          "id": "bp-critical-escalation",
+          "title": "Critical BP Escalation Action",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "condition": [
+            {
+              "kind": "applicability",
+              "expression": {
+                "language": "text/fhirpath",
+                "expression": "Observation.component.where(code.coding.code='8480-6').value.value > 180"
+              }
+            }
+          ],
+          "definitionCanonical": "http://openphc.org/ActivityDefinition/bp-critical-escalation|1.0.0",
+          "extension": [
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-severity",
+              "valueCode": "CRITICAL"
+            },
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-destination",
+              "valueCode": "SUPERVISOR"
+            }
+          ]
+        }
+      ],
+      "type": {
+        "coding": [
+          {
+            "system": "http://openphc.org/fhir/CodeSystem/action-type",
+            "code": "step"
+          }
+        ]
+      }
+    },
+    {
+      "id": "no-sub-actions",
+      "title": "Action Without Sub-Actions",
+      "trigger": [
+        {
+          "type": "named-event",
+          "name": "simple-trigger",
+          "data": [
+            {
+              "type": "Encounter"
+            }
+          ]
+        }
+      ],
+      "type": {
+        "coding": [
+          {
+            "system": "http://openphc.org/fhir/CodeSystem/action-type",
+            "code": "step"
+          }
+        ]
+      }
+    },
+    {
+      "id": "partial-actions",
+      "title": "Action With Incomplete Sub-Actions",
+      "trigger": [
+        {
+          "type": "named-event",
+          "name": "partial-trigger",
+          "data": [
+            {
+              "type": "Observation"
+            }
+          ]
+        }
+      ],
+      "action": [
+        {
+          "id": "missing-condition",
+          "title": "Action Without Condition",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "definitionCanonical": "http://openphc.org/ActivityDefinition/some-action|1.0.0"
+        },
+        {
+          "id": "missing-definition",
+          "title": "Action Without DefinitionCanonical",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "condition": [
+            {
+              "kind": "applicability",
+              "expression": {
+                "language": "text/jsonlogic",
+                "expression": "{\"==\": [1, 1]}"
+              }
+            }
+          ]
+        },
+        {
+          "id": "no-extensions-action",
+          "title": "Valid Action Without Extensions",
+          "type": {
+            "coding": [
+              {
+                "system": "http://terminology.hl7.org/CodeSystem/action-type",
+                "code": "fire-event"
+              }
+            ]
+          },
+          "condition": [
+            {
+              "kind": "applicability",
+              "expression": {
+                "language": "text/jsonlogic",
+                "expression": "{\">\": [{\"var\": \"value\"}, 100]}"
+              }
+            }
+          ],
+          "definitionCanonical": "http://openphc.org/ActivityDefinition/no-ext-action|1.0.0",
+          "extension": [
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-severity",
+              "valueCode": "LOW"
+            },
+            {
+              "url": "http://openphc.org/fhir/StructureDefinition/intelligence-destination",
+              "valueCode": "SPICE"
+            }
+          ]
+        }
+      ],
+      "type": {
+        "coding": [
+          {
+            "system": "http://openphc.org/fhir/CodeSystem/action-type",
+            "code": "step"
+          }
+        ]
+      }
+    }
+  ]
+}
