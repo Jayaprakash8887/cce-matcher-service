@@ -37,7 +37,15 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: true
-    baseline-version: 0
+    # 0 for a new database: Flyway applies V1, the greenfield migration, then V2 as a no-op.
+    #
+    # Set CCE_FLYWAY_BASELINE_VERSION=1 for the one-time deployment against a database that already
+    # holds the 1.x (pre-split) schema. Flyway then records V1 as already applied and runs only V2,
+    # which performs the upgrade. Return it to 0 afterwards.
+    #
+    # This cannot be inferred from whether the schema is empty: by the time this service migrates, the
+    # Protocol Service has already created its own tables, so the schema is never empty here.
+    baseline-version: ${CCE_FLYWAY_BASELINE_VERSION:0}
     out-of-order: true
     table: flyway_schema_history_matcher
 
