@@ -212,7 +212,7 @@ sequenceDiagram
     participant Eval as CCE Compliance Service
 
     Matcher->>DB: createStep + INSERT step_sla_state_transition (same tx)
-    Note over Matcher,DB: One row per threshold present;<br/>a step with no tolerance-days gets no MISSED row
+    Note over Matcher,DB: One row per threshold present —<br/>a step with no tolerance-days gets no MISSED row
 
     loop Polling interval
         Eval->>DB: Claim rows WHERE is_processed = FALSE<br/>AND next_attempt_at <= now() FOR UPDATE SKIP LOCKED
@@ -254,20 +254,29 @@ flowchart TD
     J --> P["completeStep()"]
     N --> P
 
-    P --> Q{"Settle sla_status<br/>(completedAt = clinical occurrence time)"}
-    Q -->|"completedAt < dueDate"| R["EARLY"]
-    Q -->|"dueDate ≤ completedAt < missedDate"| S["OVERDUE (late)"]
-    Q -->|"completedAt ≥ missedDate"| T["MISSED (late, written off)"]
-    Q -->|"No dueDate"| U["ON_TIME (default)"]
+    P --> SS["step_status = COMPLETED<br/>(the event arrived — always set)"]
+    SS --> Q{"Settle sla_status against the<br/>scheduled thresholds<br/>(completedAt = clinical occurrence time)"}
 
-    R --> V["Set state = COMPLETED"]
-    S --> V
-    T --> V
-    U --> V
+    Q -->|"No due threshold<br/>— nothing to breach"| MET["sla_status = MET"]
+    Q -->|"completedAt &lt; dueDate<br/>— beat the deadline"| MET
+    Q -->|"dueDate ≤ completedAt &lt; missedDate<br/>— recorded late"| OD["sla_status = OVERDUE"]
+    Q -->|"completedAt ≥ missedDate<br/>— recorded after being written off"| MI["sla_status = MISSED"]
 
-    V --> W["Set completedByEventId"]
-    W --> X["Update Matcher Event Log"]
+    MET --> W["Set completedAt, completedBySource,<br/>completedByEventId"]
+    OD --> W
+    MI --> W
+    W --> X["Record the transition in step_instance_history<br/>+ audit STEP_COMPLETED"]
 ```
+
+**The two statuses are independent.** `step_status` answers *did the work happen?* and is always
+`COMPLETED` here. `sla_status` answers *was it on time?* and is one of the three outcomes above — so a
+row can legitimately read `COMPLETED` + `MISSED`, meaning the work was done but only after the step had
+been written off.
+
+> There is no `EARLY` or `ON_TIME` status. The 1.x schema had a separate `completion_status` column with
+> `EARLY`/`ON_TIME`/`LATE`; `V2` drops it, because the pair above already expresses it —
+> `COMPLETED`+`MET` is on time, `COMPLETED`+`OVERDUE`/`MISSED` is late. See
+> [`SlaStatus`](data-dictionary.md#slastatus) for the full value reference.
 
 ## 5. Deviation Detection & Recording
 
@@ -320,7 +329,7 @@ sequenceDiagram
 
     rect rgb(245, 255, 245)
         Note over Evaluator,ExprEval: Step 2 — Build context & evaluate conditions
-        Evaluator->>Evaluator: Build runtime context<br/>(stepStatus, slaStatus, actionId, repeatIndex, dueDate;<br/>+ deviationType/daysOverdue on the deviation path)
+        Evaluator->>Evaluator: Build runtime context<br/>(stepStatus, slaStatus, actionId, repeatIndex, dueDate)<br/>plus deviationType/daysOverdue on the deviation path
 
         loop For each intelligence action
             Evaluator->>ExprEval: evaluate(action.language,<br/>action.expression, context)

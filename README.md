@@ -14,11 +14,14 @@ This is an **event-driven service with no REST API**. It is driven entirely by K
 
 ## Quick Start
 
+> Requires **`cce-common-util` checked out as a sibling directory** — `settings.gradle` declares
+> `includeBuild '../cce-common-util'`, so the build cannot resolve it otherwise.
+
 ```bash
 # Start shared infrastructure (from collector service)
 cd /path/to/cce-collector-service && docker compose up -d
 
-# Build
+# Build (compiles cce-common-util first, then this service)
 cd /path/to/cce-matcher-service
 ./gradlew build
 
@@ -57,35 +60,37 @@ Gradle composite build assumes.
 
 ## Architecture
 
+`*` marks a component supplied by `cce-common-util` rather than defined in this repo.
+
 ```
 cce.events.inbound → InboundEventConsumer → MatcherEngine
                                               ├── Idempotency (MatcherEventLogService)
                                               ├── Resource Extraction (ResourceInfoExtractor)
                                               ├── Tier 1 Matching (TriggerMatchingService → trigger_index)
-                                              ├── Tier 2 Evaluation (ExpressionEvaluationService)
+                                              ├── Tier 2 Evaluation (ExpressionEvaluationService *)
                                               ├── Enrollment (ProtocolInstanceService)
                                               ├── Step Management (StepInstanceService)
                                               │   ├── Flat step model (sub-steps flattened to peers)
                                               │   ├── SLA schedule (StepSlaScheduleService)
-                                              │   ├── Order-violation detection (DeviationService)
-                                              │   └── Intelligence Evaluation (IntelligenceActionEvaluator)
-                                              ├── Intelligence Publishing (IntelligenceTriggerProducer
+                                              │   ├── Order-violation detection (DeviationService *)
+                                              │   └── Intelligence Evaluation (IntelligenceActionEvaluator *)
+                                              ├── Intelligence Publishing (IntelligenceTriggerProducer *
                                               │                            → cce.intelligence.triggers)
-                                              └── Audit Logging (AuditService, after commit)
+                                              └── Audit Logging (AuditService *, after commit)
 
 Startup + every 60s: ProtocolDefinitionService.refreshProtocolCaches()
-                       └── reconciles ParsedProtocolCache + condition-only triggers against the DB
+                       └── reconciles ParsedProtocolCache * + condition-only triggers against the DB
 ```
 
 **Owned elsewhere.** Protocol and action-definition management (writes to `protocol_definition`,
 `trigger_index`, `action_definition`) belongs to the CCE Protocol Service. Time-based SLA
-transitions — advancing `sla_status` and recording the `OVERDUE`/`MISSED` deviations — belong to the SLA
-CCE Compliance Service, which claims the `step_sla_state_transition` rows this service writes.
+transitions — advancing `sla_status` and recording the `OVERDUE`/`MISSED` deviations — belong to the
+**CCE Compliance Service**, which claims the `step_sla_state_transition` rows this service writes.
 
 ## Testing
 
 ```bash
-# Unit tests (324 tests)
+# Unit tests (206 tests — shared-code tests live in cce-common-util)
 ./gradlew test
 
 # Integration tests (10 tests, EmbeddedKafka + H2)

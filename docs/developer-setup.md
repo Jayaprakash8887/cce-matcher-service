@@ -11,21 +11,41 @@
 | **PostgreSQL** | 16+ | Yes | Primary database |
 | **Apache Kafka** | 3.x | Yes | Message broker |
 | **Git** | 2.x | Yes | Version control |
+| **`cce-common-util`** | matching branch | Yes | Sibling checkout — shared entities, enums, Kafka contracts and FHIR layer, wired in via `includeBuild` |
 
 ## 2. Quick Start
 
 ### 2.1 Clone & Build
 
+This repo is one half of a composite Gradle build. `settings.gradle` declares
+`includeBuild '../cce-common-util'`, so **the shared module must be checked out as a sibling directory**
+— the build cannot resolve `org.openphc.cce:cce-common-util` otherwise.
+
 ```bash
-# Clone the repository
-git clone <repository-url>
+# Both repos side by side — the relative path in settings.gradle depends on it
+mkdir -p ~/workspace && cd ~/workspace
+git clone <url>/cce-common-util
+git clone <url>/cce-matcher-service
+
 cd cce-matcher-service
+./gradlew build          # compiles cce-common-util first, then this service
+```
 
-# Build (skip tests for fast iteration)
+Expected layout:
+
+```
+workspace/
+├── cce-common-util/       # shared entities, enums, Kafka contracts, FHIR layer
+└── cce-matcher-service/   # this repo  → settings.gradle: includeBuild '../cce-common-util'
+```
+
+There is no publish step: a change in `cce-common-util` is compiled into the next build of this service
+directly. If the build fails with `Could not resolve org.openphc.cce:cce-common-util`, the sibling
+checkout is missing or sits at a different relative path.
+
+```bash
+# Skip tests for fast iteration
 ./gradlew build -x test
-
-# Build with tests
-./gradlew build
 ```
 
 ### 2.2 Start Infrastructure
@@ -48,10 +68,10 @@ docker compose ps
 ./gradlew bootRun
 
 # Or using the JAR
-java -jar build/libs/cce-matcher-service-1.0.0.jar
+java -jar build/libs/cce-matcher-service-2.0.0.jar
 
 # With custom configuration
-DB_HOST=localhost DB_PORT=5433 java -jar build/libs/cce-matcher-service-1.0.0.jar
+DB_HOST=localhost DB_PORT=5433 java -jar build/libs/cce-matcher-service-2.0.0.jar
 ```
 
 ### 2.4 Verify Health
@@ -124,52 +144,88 @@ Configured via `cce.kafka.topics.*` in `application.yml`:
 |---|---|---|
 | `spring.flyway.enabled` | `true` | Auto-apply migrations on startup |
 | `spring.flyway.locations` | `classpath:db/migration` | Migration file location |
-| `spring.flyway.baseline-on-migrate` | `true` | Creates the history table on first run. Note `baseline-version` is `0`, so V1 is still applied afterwards — this does **not** make V1 safe against an existing schema |
+| `spring.flyway.baseline-on-migrate` | `true` | Creates the history table on first run |
+| `spring.flyway.baseline-version` | `${CCE_FLYWAY_BASELINE_VERSION:0}` | Selects which of the two paths below applies |
+| `spring.flyway.out-of-order` | `true` | Tolerates a migration landing behind one already applied |
 | `spring.flyway.table` | `flyway_schema_history_matcher` | Namespaced history table so each CCE service tracks its own migrations in the shared database |
+
+There are two migrations, and one chain serves both a new database and one carried over from the
+pre-split monolith:
+
+| Migration | On a new database | On a 1.x (pre-split) `ccedb` |
+|---|---|---|
+| `V1__initial_schema.sql` | Creates the whole 2.0.0 schema | **Skipped** — recorded as already applied |
+| `V2__upgrade_from_monolith_schema.sql` | No-op — every block is guarded on the presence of the 1.x shape | Performs the transformation (splits `state` into `step_status`/`sla_status`, moves the deadlines into `step_sla_state_transition`, renames `compliance_event_log`) |
+
+**New database:** leave `CCE_FLYWAY_BASELINE_VERSION` at `0`. V1 builds the schema, V2 finds nothing to
+change.
+
+**Upgrading an existing 1.x database:** set `CCE_FLYWAY_BASELINE_VERSION=1` for that one deployment, so
+Flyway records V1 as applied and runs only V2. Return it to `0` afterwards. This cannot be auto-detected:
+by the time this service migrates, the Protocol Service has already created its tables, so an
+"is the schema empty?" check would never be true here.
+
+> **Precondition for the upgrade path:** the source database must already be at monolith `V9` or later.
+> `V9` reversed the direction of `relatedAction` inside `protocol_definition.definition`, and `V2` does
+> not repeat that work — the JSON is data this service does not own.
+
+The repo-root [`migration/`](../migration/) folder holds the runnable equivalents (`run-upgrade.sh`,
+`verify.sql`) for operating that upgrade outside application startup.
 
 ### 3.5 Observability
 
 | Property | Value | Description |
 |---|---|---|
 | `management.endpoints.web.exposure.include` | `health,info,prometheus,metrics` | Exposed actuator endpoints |
-| `management.tracing.sampling.probability` | `1.0` | 100% trace sampling |
 | `management.metrics.tags.application` | `cce-matcher-service` | Common metric tag |
+
+There is no tracing configuration — no tracing backend is on the classpath. Correlation is via the MDC
+`correlationId` in log output.
 
 ## 4. Project Structure
 
+Two repos, side by side, joined by `includeBuild`:
+
 ```
-cce-matcher-service/
-├── artifacts/                          # Design documents
-│   └── CCE Solution Design v0.3 Draft.pdf
-├── docs/                               # Documentation (this folder)
-│   ├── architecture-overview.md
-│   ├── flow-diagrams.md
-│   ├── data-dictionary.md
-│   ├── kafka-events.md
-│   ├── deployment-guide.md
-│   ├── sample-plan-definition.md
-│   └── developer-setup.md
-├── src/
-│   └── main/
-│       ├── java/org/openphc/cce/matcher/
-│       │   ├── MatcherServiceApplication.java
-│       │   ├── config/          # Spring + Kafka configuration, topic declarations
-│       │   ├── domain/          # Entities, enums, repositories, UuidV7Generator
-│       │   ├── fhir/            # PlanDefinitionParser, ParsedProtocolCache, expression evaluation
-│       │   ├── kafka/
-│       │   │   ├── consumer/    # InboundEventConsumer (the only consumer)
-│       │   │   ├── model/       # CloudEventMessage, IntelligenceTriggerEvent
-│       │   │   └── producer/    # IntelligenceTriggerProducer
-│       │   ├── service/         # Business logic (MatcherEngine + supporting services)
-│       └── resources/
-│           ├── application.yml
-│           └── db/migration/
-│               └── V1__initial_schema.sql
-├── Dockerfile                          # Multi-stage Docker build
-├── .gitignore
-├── build.gradle                        # Gradle build configuration
-└── settings.gradle                     # Gradle settings
+workspace/
+├── cce-common-util/                      # shared module (own repo)
+│   └── src/main/java/org/openphc/cce/common/
+│       ├── entity/       # shared JPA entities (StepInstance, StepSlaStateTransition, …)
+│       ├── enums/        # the shared status vocabulary
+│       ├── repository/   # repositories over the shared entities
+│       ├── event/        # CloudEventMessage, IntelligenceTriggerEvent (Kafka contracts)
+│       ├── kafka/        # IntelligenceTriggerProducer, KafkaTopicProperties
+│       ├── fhir/         # PlanDefinitionParser, ParsedProtocolCache, expression evaluation
+│       ├── service/      # AuditService, DeviationService, IntelligenceActionEvaluator,
+│       │                 #   ActionDefinitionResolver, SlaThresholdReader
+│       ├── config/       # AppConfig, FhirConfig, KafkaRetryProperties
+│       ├── web/          # ErrorResponse, GlobalExceptionHandler
+│       └── support/      # UuidV7Generator
+│
+└── cce-matcher-service/                  # this repo
+    ├── docs/                             # documentation (this folder)
+    ├── migration/                         # runnable 1.x → 2.0.0 upgrade (run-upgrade.sh, verify.sql)
+    ├── src/
+    │   ├── main/
+    │   │   ├── java/org/openphc/cce/matcher/
+    │   │   │   ├── MatcherServiceApplication.java   # scans org.openphc.cce (both packages)
+    │   │   │   ├── config/          # KafkaConfig, ObservabilityConfig
+    │   │   │   ├── domain/          # Matcher-owned tables + their repositories
+    │   │   │   ├── kafka/consumer/  # InboundEventConsumer
+    │   │   │   └── service/         # MatcherEngine + the matching pipeline
+    │   │   └── resources/
+    │   │       ├── application.yml
+    │   │       └── db/migration/    # V1__initial_schema.sql, V2__upgrade_from_monolith_schema.sql
+    │   ├── test/                    # unit tests
+    │   └── integrationTest/         # EmbeddedKafka + H2
+    ├── Dockerfile                   # multi-stage build
+    ├── build.gradle
+    └── settings.gradle              # includeBuild '../cce-common-util'
 ```
+
+> **Build from the workspace directory, not this repo.** `Dockerfile` copies both repositories, and
+> Docker `COPY` cannot reach outside its build context. Building with this repo as the context fails in
+> stage 1 with `Included build '/.../cce-common-util' does not exist`.
 
 ## 5. Database Setup
 
@@ -201,7 +257,8 @@ psql -h localhost -p 5433 -U cce_user -d ccedb \
 
 ```bash
 # Build the Docker image
-docker build -t cce-matcher-service:latest .
+cd ..   # the workspace directory holding both repos
+docker build -f cce-matcher-service/Dockerfile -t cce-matcher-service:latest .
 
 # Run the container
 # The image sets SERVER_PORT=8080 itself, matching its EXPOSE/healthcheck port
@@ -265,7 +322,7 @@ Stage 2: Runtime (eclipse-temurin:21-jre-alpine)
 ### 8.3 Running Tests
 
 ```bash
-# Unit tests (324 tests)
+# Unit tests (206 tests — shared-code tests live in cce-common-util)
 ./gradlew test
 
 # Integration tests (10 tests — EmbeddedKafka + H2)
@@ -322,7 +379,7 @@ Format: `timestamp [thread] [correlationId] level logger - message`
 
 ```bash
 # Via environment variable
-LOGGING_LEVEL_ORG_OPENPHC_CCE_MATCHER=DEBUG java -jar build/libs/cce-matcher-service-1.0.0.jar
+LOGGING_LEVEL_ORG_OPENPHC_CCE_MATCHER=DEBUG java -jar build/libs/cce-matcher-service-2.0.0.jar
 
 # Via application.yml override
 # logging.level.org.openphc.cce.matcher: DEBUG

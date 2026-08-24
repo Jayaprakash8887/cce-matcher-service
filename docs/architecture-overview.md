@@ -4,6 +4,9 @@
 
 The **CCE Matcher Service** is a core microservice within the **CCE** platform. It tracks patient adherence to clinical protocols defined as FHIR R4 `PlanDefinition` resources — consuming clinical events, matching them against protocol steps, detecting deviations, evaluating intelligence actions, and publishing intelligence trigger events to downstream services.
 
+This section places Matcher among its neighbours. *Why* the platform is split across these services, and the topology as a whole, is covered once in
+[`cce-common-util` → architecture-overview.md](../../cce-common-util/docs/architecture-overview.md).
+
 ```mermaid
 graph TB
     subgraph Dependent Services
@@ -155,30 +158,80 @@ See [Kafka Events §5.3](kafka-events.md#52-intelligencetriggerevent-outbound--c
 | **Testing** | JUnit 5 + Mockito | 5.x / 5.x | Unit testing with mocked dependencies |
 | **Integration testing** | EmbeddedKafka + H2 (PostgreSQL mode) | — | In-process broker and database; no Docker required |
 
-## 3. Package Structure
+## 3. Module & Package Structure
+
+The service is one half of a **composite Gradle build**. Shared vocabulary — entities, enums, Kafka
+contracts and the FHIR layer — lives in a sibling repository, `cce-common-util`, so that this service and
+the CCE Compliance Service cannot drift on the tables and messages they both touch.
+
+```
+cce-matcher-service/                       ← this repo
+└── settings.gradle: includeBuild '../cce-common-util'
+```
+
+`includeBuild` rather than a published artifact: the two repos sit side by side, so a change in
+`cce-common-util` is picked up on the next build with no publish step and no version bump. **The sibling
+repo must be checked out next to this one or the build fails** — see
+[Developer Setup](developer-setup.md).
+
+### 3.1 What comes from `cce-common-util`
+
+Anything more than one service must agree on: the shared entities and repositories, the status enums,
+the Kafka wire contracts (`CloudEventMessage`, `IntelligenceTriggerEvent`), the FHIR layer
+(`PlanDefinitionParser`, `ParsedProtocolCache`, `ExpressionEvaluationService`) and the shared services
+(`AuditService`, `DeviationService`, `IntelligenceActionEvaluator`, `ActionDefinitionResolver`,
+`SlaThresholdReader`).
+
+That inventory is not restated here — see
+[`cce-common-util` → library-reference.md](../../cce-common-util/docs/library-reference.md) for the
+package-by-package reference, and
+[data-dictionary.md](../../cce-common-util/docs/data-dictionary.md) for the nine shared tables.
+
+`SlaThresholdReader` is worth singling out: Matcher *writes* a step's SLA schedule and Compliance *reads*
+it, so how those rows are interpreted is shared code rather than duplicated on both sides.
+
+### 3.2 What stays here (`org.openphc.cce.matcher`)
+
+Matching is this service's job and nothing else's, so it does not move:
 
 ```
 org.openphc.cce.matcher
-├── MatcherServiceApplication.java             # @SpringBootApplication + @EnableScheduling
-├── config/                                    # AppConfig, FhirConfig, KafkaConfig, ObservabilityConfig,
-│                                              #   KafkaTopicProperties, KafkaRetryProperties
+├── MatcherServiceApplication.java   # @SpringBootApplication(scanBasePackages = "org.openphc.cce")
+│                                    #   + @EntityScan / @EnableJpaRepositories("org.openphc.cce")
+│                                    #   + @EnableScheduling
+├── config/                          # KafkaConfig (consumer/producer factories, topics),
+│                                    #   ObservabilityConfig (repository-backed gauges)
 ├── domain/
-│   ├── entity/                                # 13 JPA entities + TriggerIndexId (@Embeddable)
-│   ├── enums/                                 # 10 value-based enums
-│   ├── repository/                            # 13 Spring Data JPA repositories
-│   └── support/                               # UuidV7Generator (time-ordered ids)
-├── fhir/                                      # PlanDefinitionParser, ParsedProtocolCache,
-│                                              #   ExpressionEvaluationService (JSONLogic + FHIRPath)
-├── kafka/
-│   ├── consumer/                              # InboundEventConsumer (the only consumer)
-│   ├── model/                                 # CloudEventMessage, IntelligenceTriggerEvent
-│   └── producer/                              # IntelligenceTriggerProducer
-└── service/                                   # 16 services/components + 3 records
-                                               #   (CodePathTriple, ConditionOnlyTrigger, MatchedStep)
+│   ├── entity/                      # Matcher-owned tables only: MatcherEventLog, Facility,
+│   │                                #   ProtocolInstanceHistory, StepInstanceHistory
+│   └── repository/                  # Those, plus ProtocolDefinitionRepository (fingerprint query)
+│                                    #   and TriggerIndexRepository (the Tier 1 match)
+├── kafka/consumer/                  # InboundEventConsumer — the only consumer
+└── service/                         # MatcherEngine and the matching pipeline:
+                                     #   ResourceInfoExtractor, TriggerMatchingService,
+                                     #   ClinicalEventTimeExtractor, StepInstanceService,
+                                     #   StepSlaScheduleService, ProtocolDefinitionService,
+                                     #   ProtocolInstanceService, MatcherEventLogService,
+                                     #   StateTransitionHistoryService, FacilityService
+                                     #   + records CodePathTriple, ConditionOnlyTrigger, MatchedStep
 ```
 
-There is no `web/` package: this service exposes no REST API. Kafka consumer/producer factories and topic
-declarations live in `config/KafkaConfig`, not under `kafka/`.
+### 3.3 Bean discovery across the two packages
+
+`org.openphc.cce.common` is not under this application class's default scan root, so all three scans are
+widened explicitly on `MatcherServiceApplication`:
+
+| Annotation | Why it is needed |
+|---|---|
+| `@SpringBootApplication(scanBasePackages = "org.openphc.cce")` | Picks up the `@Component`/`@Service` beans `cce-common-util` contributes |
+| `@EntityScan("org.openphc.cce")` | `@Entity` types are not found by component scanning |
+| `@EnableJpaRepositories("org.openphc.cce")` | Nor are Spring Data repository interfaces |
+
+> One consequence worth knowing: `common.web.GlobalExceptionHandler` is a `@ControllerAdvice` and is
+> therefore registered here too. It is inert — this service has no controllers for it to advise — but it
+> is on the context.
+
+There is no `web/` package in this repo: the service exposes no REST API of its own.
 
 ## 4. Core Pipeline — MatcherEngine
 

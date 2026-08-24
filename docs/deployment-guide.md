@@ -97,8 +97,13 @@ log output only.
 
 ### Build the Image
 
+> **Build from the workspace directory, not this repo.** `Dockerfile` copies both repositories, and
+> Docker `COPY` cannot reach outside its build context. Building with this repo as the context fails in
+> stage 1 with `Included build '/.../cce-common-util' does not exist`.
+
 ```bash
-docker build -t cce-matcher-service:1.0.0 .
+# Run from the workspace directory containing both cce-matcher-service and cce-common-util
+docker build -f cce-matcher-service/Dockerfile -t cce-matcher-service:2.0.0 .
 ```
 
 ### Run with Docker
@@ -114,7 +119,7 @@ docker run -d \
   -e DB_USERNAME=cce_user \
   -e DB_PASSWORD=cce_pass \
   -e KAFKA_BOOTSTRAP_SERVERS=kafka-host:9092 \
-  cce-matcher-service:1.0.0
+  cce-matcher-service:2.0.0
 ```
 
 ### Docker Compose (Local Development)
@@ -166,7 +171,7 @@ spec:
     spec:
       containers:
         - name: cce-matcher-service
-          image: cce-matcher-service:1.0.0
+          image: cce-matcher-service:2.0.0
           ports:
             - containerPort: 8080
           env:
