@@ -5,22 +5,22 @@
 -- Database: PostgreSQL 16
 --
 -- Owns the runtime plane: protocol instances, steps and their SLA schedule, the inbound-event
--- idempotency log, facilities, and the append-only status history. Also creates `deviation` and
--- `intelligence_event_log`, whose foreign keys point into `step_instance` — the Compliance Service
--- writes rows there but owns no DDL.
+-- idempotency log, facilities, and the append-only status history. Also creates `deviation`, whose
+-- foreign key points into `step_instance`, and `intelligence_event_log`, which carries no foreign
+-- keys — the Compliance Service writes rows in both but owns no DDL.
 --
 -- Depends on the Protocol Service having migrated first: `protocol_instance.protocol_definition_id`
--- and `trigger_index` reference `protocol_definition`, which that service creates. Deployment order is
+-- references `protocol_definition`, which that service creates. Deployment order is
 -- protocol -> matcher -> compliance.
 --
 -- The service shares the `ccedb` database with other CCE services and keeps its own
 -- Flyway ledger (`spring.flyway.table = flyway_schema_history_matcher`), so its migrations
 -- are tracked independently of anything else in the database.
 --
--- `id` columns of protocol_instance, step_instance and deviation carry no database default:
--- they are time-ordered UUIDv7 values generated application-side (Hibernate UuidV7Generator),
--- which lets the Scheduler Service use `step_instance.id` as a monotonic watermark cursor.
--- The remaining tables keep gen_random_uuid() defaults.
+-- `id` columns of protocol_instance, step_instance, step_sla_state_transition and deviation carry
+-- no database default: they are time-ordered UUIDv7 values generated application-side (Hibernate
+-- UuidV7Generator), so insertion order is readable from the key and a range of ids is a range of
+-- time. The remaining tables keep gen_random_uuid() defaults.
 --
 -- REPLICA IDENTITY FULL is set on every CDC-replicated table. Publication membership and
 -- CDC-user grants live in data-pipeline/cdc/01-configure-replication.sql, not here.
@@ -98,7 +98,7 @@ ALTER TABLE matcher_event_log REPLICA IDENTITY FULL;
 -- evidence. Because the two statuses are independent, a step can be COMPLETED + MISSED (recorded
 -- after being written off).
 --
--- Both thresholds live on step_sla_state_transition (§5) rather than here, so the service that
+-- Both thresholds live on step_sla_state_transition (§4) rather than here, so the service that
 -- evaluates due work selects from a table that shrinks as work is processed instead of rescanning
 -- every step row.
 -- =============================================
@@ -111,10 +111,10 @@ CREATE TABLE step_instance (
     -- Nullable: null means no threshold has fallen due, so timeliness is not yet judged.
     -- Written only by the Compliance Service. Stays null for a step with no SLA at all.
     sla_status              VARCHAR,
-    -- SLA thresholds are not denormalized here; each is a step_sla_state_transition row (see §5).
+    -- SLA thresholds are not denormalized here; each is a step_sla_state_transition row (see §4).
     completed_at            TIMESTAMPTZ,
     completed_by_source     VARCHAR,
-    matched_event_id   UUID,
+    matched_event_id        UUID,
     required_behavior       VARCHAR,
     created_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
@@ -133,14 +133,13 @@ CREATE TABLE step_instance (
 );
 
 CREATE INDEX idx_step_instance_protocol ON step_instance (protocol_instance_id);
--- Steps whose SLA can still move: MET and MISSED have no threshold left to cross.
 -- The steps whose SLA can still move: not yet judged, or overdue but not yet written off.
 CREATE INDEX idx_step_instance_sla_status ON step_instance (sla_status)
     WHERE sla_status IS NULL OR sla_status = 'OVERDUE';
 -- Locating the step a late-arriving event should complete.
 CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_id, action_id)
     WHERE step_status = 'NOT_STARTED';
-CREATE INDEX idx_step_instance_completed_event ON step_instance (matched_event_id)
+CREATE INDEX idx_step_instance_matched_event ON step_instance (matched_event_id)
     WHERE matched_event_id IS NOT NULL;
 
 ALTER TABLE step_instance REPLICA IDENTITY FULL;

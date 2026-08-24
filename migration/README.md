@@ -30,7 +30,7 @@ schema. See [Deployment Guide](../docs/deployment-guide.md).
 | `compliance_event_log` | renamed `matcher_event_log` |
 | `state`/`completion_status` on `step_instance_history` | `step_status`/`sla_status` |
 | `step_state` on `intelligence_event_log` | `step_status`/`sla_status` |
-| `step_instance.completed_by_event_id` | renamed `matched_event_id` — the column is set whenever an event matches, and matching is what it records |
+| `step_instance.completed_by_event_id` | renamed `matched_event_id` — the column is set whenever an event matches, and matching is what it records. The rename also adds the foreign key to `matcher_event_log(id)` and the partial index on the column: 1.x declared neither, and renaming a column brings neither with it |
 | `protocol_instance.protocol_canonical` | dropped; reached by FK as `protocol_definition.url\|version`, which also gives the version enrolled under rather than the current one |
 | `deviation.protocol_instance_id` | dropped; reachable as `step_instance.protocol_instance_id`, which is `NOT NULL` |
 | `audit_log` | dropped; the append-only history tables carry state transitions, and actor attribution is planned to move onto the domain tables |
@@ -41,6 +41,10 @@ it. Background: [Architecture Overview §4](../../cce-common-util/docs/architect
 The last four rows are applied by §8 and §9 of the migration, which run last: they are the final step
 of the cutover, after the tables above are in their new shape. `audit_log` is dropped by its own
 statement so an operator who wants to retain the 1.x trail can comment out just that one line.
+
+§8 fails with a row count rather than a constraint violation if any `matched_event_id` points at an
+event that is no longer in the log — the foreign key cannot be added over those rows, and which rows
+to null out is a data decision, not a schema one. Check 12 of `verify.sql` reports them.
 
 ### How each old state maps
 
@@ -168,9 +172,17 @@ Restoring also means putting the 1.x services back, since 2.0.0 cannot run again
 
 ## Verified against
 
-PostgreSQL 16. The upgrade was rehearsed from a database built by the monolith's own `V1`–`V9`
-migrations, seeded with a row for every old `state` value and matching history and intelligence-event
-rows. The result was diffed against a greenfield 2.0.0 schema and is **identical** — 113 columns, 37
-constraints, and the same indexes. The Compliance Service then started against it (`ddl-auto:
-validate`) and its first sweep produced exactly one OVERDUE deviation, for the step that had been
-`DUE`.
+PostgreSQL 16. The upgrade was rehearsed from a 1.x database seeded with a row for every old `state`
+value plus matching history, deviation and intelligence-event rows, and the result diffed against a
+greenfield 2.0.0 schema (Protocol `V1` + Matcher `V1`). The two are **identical** — 101 columns, 33
+constraints, 37 indexes, and the same replica identity on every table. Matcher's `V2` is also a clean
+no-op against greenfield, which is what lets one chain serve both paths.
+
+Three of those reconciliations exist because the earlier rehearsal missed them: renaming a table or a
+column carries neither constraint names nor indexes, so the `matched_event_id` foreign key, the
+`matcher_event_log` `processing_status` CHECK, and `REPLICA IDENTITY FULL` all had to be re-established
+explicitly (§1, §7, §8). Checks 11-13 of `verify.sql` are what confirm they landed on a real database.
+
+Still to re-confirm on a full 1.x database rather than a seeded fixture: that the Compliance Service
+starts against the upgraded schema under `ddl-auto: validate`, and that its first sweep raises OVERDUE
+deviations only for the steps that had been sitting in `DUE`.

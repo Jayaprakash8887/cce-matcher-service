@@ -24,6 +24,15 @@
 --     step_sla_state_transition, one per threshold, which is also the handoff to the Compliance
 --     Service.
 --   * compliance_event_log becomes matcher_event_log, following the service that owns it.
+--   * step_instance.completed_by_event_id becomes matched_event_id, and gains the foreign key and
+--     partial index V1 declares on it — 1.x had neither.
+--   * protocol_instance.protocol_canonical and deviation.protocol_instance_id are dropped: both are
+--     reachable by foreign key from what remains.
+--   * audit_log is dropped. Those last three run last (§8, §9), after the tables above are in shape.
+--
+-- Beyond those, the migration also reconciles what a rename cannot carry and what 1.x never declared:
+-- constraint and index names, the matcher_event_log processing_status CHECK, and REPLICA IDENTITY FULL
+-- on the CDC-replicated tables. An upgraded database and a greenfield one have to be the same schema.
 --
 -- SLA status is derived from timestamps rather than from completion_status, because that is what the
 -- runtime does when it settles a completed step: the clinical occurrence time is better evidence than
@@ -46,6 +55,49 @@ BEGIN
         ALTER INDEX  IF EXISTS compliance_event_log_cloudevents_id_source_key
             RENAME TO matcher_event_log_cloudevents_id_source_key;
         RAISE NOTICE 'Renamed compliance_event_log to matcher_event_log';
+    END IF;
+END $$;
+
+-- The processing_status CHECK, which the rename cannot carry either: a 1.x database holds it under the
+-- old table's name, or never declared it at all and left the values to the application. Both 1.x and
+-- 2.0.0 allow exactly MATCHED / ZERO_MATCH / DUPLICATE, so the constraint only ever writes down what
+-- the data already obeys.
+DO $$
+DECLARE
+    stray TEXT;
+BEGIN
+    IF to_regclass('public.matcher_event_log') IS NULL THEN
+        RAISE NOTICE 'No matcher_event_log; nothing to reconcile';
+        RETURN;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM pg_constraint
+               WHERE conrelid = 'matcher_event_log'::regclass
+                 AND conname = 'compliance_event_log_processing_status_check')
+    THEN
+        ALTER TABLE matcher_event_log
+            RENAME CONSTRAINT compliance_event_log_processing_status_check
+                           TO matcher_event_log_processing_status_check;
+        RAISE NOTICE 'Renamed compliance_event_log_processing_status_check';
+
+    ELSIF NOT EXISTS (SELECT 1 FROM pg_constraint
+                      WHERE conrelid = 'matcher_event_log'::regclass
+                        AND conname = 'matcher_event_log_processing_status_check')
+    THEN
+        -- Name the offending values rather than letting the ADD fail on them: an unexpected status is
+        -- data to resolve, not a schema difference to work around.
+        SELECT string_agg(DISTINCT processing_status, ', ') INTO stray
+        FROM matcher_event_log
+        WHERE processing_status NOT IN ('MATCHED', 'ZERO_MATCH', 'DUPLICATE');
+
+        IF stray IS NOT NULL THEN
+            RAISE EXCEPTION 'Cannot add matcher_event_log_processing_status_check: unexpected '
+                            'processing_status value(s) present (%). Resolve them, then re-run.', stray;
+        END IF;
+
+        ALTER TABLE matcher_event_log ADD CONSTRAINT matcher_event_log_processing_status_check
+            CHECK (processing_status IN ('MATCHED', 'ZERO_MATCH', 'DUPLICATE'));
+        RAISE NOTICE 'Added matcher_event_log_processing_status_check';
     END IF;
 END $$;
 
@@ -293,16 +345,29 @@ BEGIN
     ALTER TABLE intelligence_event_log DROP COLUMN step_state;
 END $$;
 
--- ── 7. Indexes V1 adds that the 1.x schema lacked ────────────────────────────
+-- ── 7. Indexes and replica identity V1 sets that the 1.x schema may lack ─────
 CREATE INDEX IF NOT EXISTS idx_protocol_instance_enrollment
     ON protocol_instance (patient_id, protocol_definition_id, status);
 CREATE INDEX IF NOT EXISTS idx_protocol_instance_history_instance
     ON protocol_instance_history (protocol_instance_id, changed_at);
 
--- ── 8. Columns 2.0.0 removes ─────────────────────────────────────────────────
--- Three columns the 1.x schema carried that 2.0.0 does not. Each is derivable from what remains, so
--- nothing is lost by dropping them — but each is also read by downstream services, which is why this
--- runs last: the drop is the final step of the cutover, after the tables above are in their new shape.
+-- V1 sets REPLICA IDENTITY FULL on every CDC-replicated table it creates, so an upgraded database has
+-- to carry it too or Debezium sends incomplete before-images for UPDATE and DELETE. The data-pipeline's
+-- cdc/01-configure-replication.sql sets the same thing, but it is a separate script an operator may not
+-- have run against this database yet, and the setting is idempotent. step_sla_state_transition gets its
+-- own in §3; the history tables are append-only and stay on the default PK identity, as in V1.
+ALTER TABLE protocol_instance      REPLICA IDENTITY FULL;
+ALTER TABLE matcher_event_log      REPLICA IDENTITY FULL;
+ALTER TABLE step_instance          REPLICA IDENTITY FULL;
+ALTER TABLE deviation              REPLICA IDENTITY FULL;
+ALTER TABLE intelligence_event_log REPLICA IDENTITY FULL;
+ALTER TABLE facility               REPLICA IDENTITY FULL;
+
+-- ── 8. Columns 2.0.0 removes, and the one it renames ─────────────────────────
+-- Two columns the 1.x schema carried that 2.0.0 does not, plus the completed_by_event_id rename. Each
+-- dropped column is derivable from what remains, so nothing is lost — but each is also read by
+-- downstream services, which is why this runs last: it is the final step of the cutover, after the
+-- tables above are in their new shape.
 DO $$
 BEGIN
     -- protocol_instance.protocol_canonical == protocol_definition.url || '|' || version. Since
@@ -337,6 +402,56 @@ BEGIN
         RAISE NOTICE 'Renamed step_instance.completed_by_event_id to matched_event_id';
     END IF;
 END $$;
+
+-- The column's foreign key and index, which the rename above cannot bring with it: renaming a column
+-- leaves constraint and index names behind (§1), and 1.x declared neither in the first place — the link
+-- to the event log was application-only. V1 declares both, so an upgraded database has to end up with
+-- them under V1's names or the two schemas are not the same schema.
+DO $$
+DECLARE
+    fk_name TEXT;
+    orphans BIGINT;
+BEGIN
+    SELECT c.conname INTO fk_name
+    FROM pg_constraint c
+    WHERE c.conrelid = 'step_instance'::regclass
+      AND c.contype = 'f'
+      AND c.conkey = ARRAY[(SELECT a.attnum FROM pg_attribute a
+                            WHERE a.attrelid = 'step_instance'::regclass
+                              AND a.attname = 'matched_event_id')]::smallint[];
+
+    IF fk_name IS NULL THEN
+        -- A row pointing at an event that is no longer in the log would fail the ADD, taking the whole
+        -- migration with it. Say which rows and stop, rather than leaving the operator to read a
+        -- constraint-violation message: the fix is a data decision, not a schema one.
+        SELECT count(*) INTO orphans
+        FROM step_instance s
+        WHERE s.matched_event_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM matcher_event_log e WHERE e.id = s.matched_event_id);
+
+        IF orphans > 0 THEN
+            RAISE EXCEPTION 'Cannot add step_instance_matched_event_id_fkey: % step_instance row(s) '
+                            'point at a matched_event_id with no matcher_event_log row. Null those '
+                            'references or restore the events, then re-run.', orphans;
+        END IF;
+
+        ALTER TABLE step_instance ADD CONSTRAINT step_instance_matched_event_id_fkey
+            FOREIGN KEY (matched_event_id) REFERENCES matcher_event_log(id);
+        RAISE NOTICE 'Added step_instance_matched_event_id_fkey';
+
+    ELSIF fk_name <> 'step_instance_matched_event_id_fkey' THEN
+        EXECUTE format('ALTER TABLE step_instance RENAME CONSTRAINT %I TO '
+                       'step_instance_matched_event_id_fkey', fk_name);
+        RAISE NOTICE 'Renamed % to step_instance_matched_event_id_fkey', fk_name;
+    END IF;
+END $$;
+
+-- Any 1.x index on the column carries the pre-rename name and no WHERE clause; V1's is partial, so the
+-- old shape is dropped rather than renamed.
+DROP INDEX IF EXISTS idx_step_instance_completed_by_event_id;
+DROP INDEX IF EXISTS idx_step_instance_completed_event;
+CREATE INDEX IF NOT EXISTS idx_step_instance_matched_event
+    ON step_instance (matched_event_id) WHERE matched_event_id IS NOT NULL;
 
 -- ── 9. audit_log ─────────────────────────────────────────────────────────────
 -- Dropped in 2.0.0. The append-only history tables carry state transitions, and actor attribution is
