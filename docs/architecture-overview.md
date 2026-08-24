@@ -179,7 +179,7 @@ repo must be checked out next to this one or the build fails** — see
 Anything more than one service must agree on: the shared entities and repositories, the status enums,
 the Kafka wire contracts (`CloudEventMessage`, `IntelligenceTriggerEvent`), the FHIR layer
 (`PlanDefinitionParser`, `ParsedProtocolCache`, `ExpressionEvaluationService`) and the shared services
-(`AuditService`, `DeviationService`, `IntelligenceActionEvaluator`, `ActionDefinitionResolver`,
+(`DeviationService`, `StateTransitionHistoryService`, `IntelligenceActionEvaluator`, `ActionDefinitionResolver`,
 `SlaThresholdReader`).
 
 That inventory is not restated here — see
@@ -304,7 +304,7 @@ The resolved time is **clamped to `now()`** in `StepInstanceService.completeStep
 
 **Enrollment anchoring:** the same `resolveOccurredAt(event)` result is also used as `ProtocolInstance.enrolled_at`. So a patient's enrollment — and any downstream analytics that date-filter cohorts on `enrolled_at` — reflects when they *clinically* entered care, not when the event was processed, consistent with step completion. Enrollment is idempotent, so `enrolled_at` is fixed by the first matching event to be processed. Unlike `completed_at`, enrollment does **not** apply the `completeStep` future-clamp (it does not anchor step schedules — those anchor on `completed_at`), so its only clock guard is `resolveOccurredAt`'s own `now()` last resort.
 
-> **Late-arriving completions:** when ingestion lag exceeds a dependent step's offset, that step can be created with its `OVERDUE_TO_MISSED` row already due and transition (possibly recording a deviation) at the evaluator's next cycle. This is real-world-accurate — the step genuinely is late — and is a consequence of anchoring to clinical time.
+> **Late-arriving completions:** when ingestion lag exceeds a dependent step's offset, that step can be created with its `MISSED_DATE_REACHED` row already due and transition (possibly recording a deviation) at the evaluator's next cycle. This is real-world-accurate — the step genuinely is late — and is a consequence of anchoring to clinical time.
 
 ### 4.3 Metric time semantics
 
@@ -529,14 +529,14 @@ What follows is what *this* service does within them.
 
 **Intelligence action evaluation:** On step completion and on `ORDER_VIOLATION` detection, the intelligence action evaluator is invoked. See §6.3 for details.
 
-**Required behavior:** Steps with `requiredBehavior=could` (from `PlanDefinition.action.requiredBehavior`) are optional. When the evaluator processes `OVERDUE_TO_MISSED` on a `could` step, its SLA settles as `MET` with no deviation — nothing was breached by the event never arriving — while `step_status` stays `NOT_STARTED`, which is what distinguishes it from a step that was genuinely completed. The same treatment is applied when a subsequent step completes and preceding `could` steps are still outstanding.
+**Required behavior:** Steps with `requiredBehavior=could` (from `PlanDefinition.action.requiredBehavior`) are optional. When the evaluator processes `MISSED_DATE_REACHED` on a `could` step, its SLA settles as `MET` with no deviation — nothing was breached by the event never arriving — while `step_status` stays `NOT_STARTED`, which is what distinguishes it from a step that was genuinely completed. The same treatment is applied when a subsequent step completes and preceding `could` steps are still outstanding.
 
 **Backfilling unrecorded mandatory predecessors:** progressive instantiation only works *forward* from a completed step, so a step created reactively from its own trigger (`MatcherEngine.createInitialStep`) leaves the mandatory steps that should have preceded it with **no `step_instance` row at all** — e.g. a `treatment` event arriving for a patient whose `vitals-recording`, `consultation` and `diagnosis` were never reported. Those steps read as "not started" in the journey view and, having no row, have no scheduled transition either, so they never surface as a deviation.
 
-`StepInstanceService.backfillMissingMandatorySteps` closes that gap. After every completion, any mandatory step that is a transitive `relatedAction` predecessor of the progress observed so far (`PlanDefinitionParser.computeMustPredecessorSteps`) but that has no `step_instance` row is created in `PENDING` state:
+`StepInstanceService.backfillMissingMandatorySteps` closes that gap. After every completion, any mandatory step that is a transitive `relatedAction` predecessor of the progress observed so far (`PlanDefinitionParser.computeMustPredecessorSteps`) but that has no `step_instance` row is created with `step_status = NOT_STARTED` and no SLA judgement yet:
 
 - **Scope — predecessors only** — the backfill covers work that is *already late*, never mandatory work still ahead in the chain. Materializing steps still ahead would stamp them with this completion's time and flatten the schedule their own `relatedAction` offsets define (e.g. `lab-results`' `+3d` after `lab-order`), so they are left to progressive instantiation, which creates them on their predecessor's completion with the intended due dates. For example, completing `chief-complaints` does **not** backfill `diagnosis`; a later `treatment` completion does, because `diagnosis` is then a predecessor of observed progress.
-- **Dates** — the scheduled due date is the clinical completion time of the step that revealed the gap. Every backfilled step is a prerequisite that should already have happened, so they are all equally past due and there is no future schedule left to preserve among them. The missed threshold is derived from the step's `tolerance-days` extension. The evaluator then drives `sla_status` `PENDING → OVERDUE → MISSED`, so mandatory work that is never recorded surfaces as a `MISSED` deviation. If the event does arrive later, `findActionableStep` picks the row up and completes it, leaving `sla_status` at the breach it reached. A step with no `tolerance-days` gets no missed threshold and therefore never advances past `OVERDUE`.
+- **Dates** — the scheduled due date is the clinical completion time of the step that revealed the gap. Every backfilled step is a prerequisite that should already have happened, so they are all equally past due and there is no future schedule left to preserve among them. The missed threshold is derived from the step's `tolerance-days` extension. The Compliance Service then drives `sla_status` from null to `OVERDUE` to `MISSED`, so mandatory work that is never recorded surfaces as a `MISSED` deviation. If the event does arrive later, `findActionableStep` picks the row up and completes it — and because Matcher does not judge timeliness, the breach the Compliance Service records still reflects the `completed_at` it finds. A step with no `tolerance-days` gets no missed threshold and therefore never advances past `OVERDUE`.
 - **Ordering within `completeStep`** — backfill runs *after* `detectOrderViolations`, so a freshly backfilled row is never counted as an incomplete prerequisite for the completion that revealed it; this pass does not invent an `ORDER_VIOLATION`. Subsequent completions do see those rows, so a genuinely out-of-order journey raises `ORDER_VIOLATION` from the next completion onward.
 - **Idempotent** — a mandatory step that already has any row, in any state (pre-existing, terminal, or created earlier in the same transaction by progressive instantiation), is left alone. One row per step (`repeat_index` 0) regardless of `timing.repeat.count`: this is a placeholder for work never recorded, not a scheduled recurrence.
 
@@ -720,7 +720,7 @@ Each **intelligence action** (`PlanDefinition.action.action`) contains:
 | `trigger_reason` | Why the action fired: `missed`, `order_violation`, `completion` |
 | `evaluation_context` | Runtime variables passed to the condition evaluator |
 
-All execution and evaluation context is stored in a single row — no FK constraints, no joins required. See [Data Dictionary §11](../../cce-common-util/docs/data-dictionary.md#12-intelligence_event_log).
+All execution and evaluation context is stored in a single row — no FK constraints, no joins required. See [Data Dictionary §11](../../cce-common-util/docs/data-dictionary.md#11-intelligence_event_log).
 
 ### 6.4 Flat Step Model (Nested Actions Flattened)
 
@@ -743,7 +743,7 @@ Both ordering families are normalized into one directed graph by `PlanDefinition
 - Nesting is **organizational only** — it groups a sub-step under its enclosing action but does **not** create an implicit `relatedStep`/dependency link. Ordering between a parent and its sub-steps (and among sub-steps) must be expressed explicitly via `relatedAction`. A sub-step with no explicit prerequisite is created independently whenever its own trigger fires (`MatcherEngine.createInitialStep`), exactly like a top-level step — it does not wait for its parent to complete. Whether a sub-step waits on its parent is the protocol author's clinical decision, expressed with `relatedAction`.
 - `parentActionId` records nesting-group membership only. It is **not** used to create step dependencies or `relatedAction` links.
 - A sub-step whose `relatedAction` names a sibling as its prerequisite is flattened as-is and created progressively via standard `createDependentSteps()` logic
-- **Fan-in** — a step may declare several prerequisites. It is instantiated only once none of the others is still outstanding (`step_status=NOT_STARTED` with `sla_status` still `PENDING` or `OVERDUE`), so its due date anchors to the last prerequisite to finish rather than whichever completed first. A prerequisite with no `step_instance` row at all does not block, since waiting on work that may never be recorded would strand the dependent step permanently.
+- **Fan-in** — a step may declare several prerequisites. It is instantiated only once none of the others is still outstanding (`step_status=NOT_STARTED` with `sla_status` still null or `OVERDUE`), so its due date anchors to the last prerequisite to finish rather than whichever completed first. A prerequisite with no `step_instance` row at all does not block, since waiting on work that may never be recorded would strand the dependent step permanently.
 - All trigger indexing uses the step's **plain action ID** (e.g., `"anc-visit-1-referral"`)
 - Intelligence actions are found via flat lookup by `actionId` (no tree traversal needed)
 
@@ -820,7 +820,7 @@ sequenceDiagram
     Engine->>Engine: createInitialStep(anc-visit-1-referral)<br/>(no dependency on anc-visit-1 — nesting is organizational only)
     Engine->>SIS: completeStep(anc-visit-1-referral)
     SIS->>SIS: createDependentSteps() — finds "anc-visit-1-referral-ack"<br/>(its relatedAction names anc-visit-1-referral, relationship after-end)
-    SIS->>DB: Create anc-visit-1-referral-ack (PENDING)
+    SIS->>DB: Create anc-visit-1-referral-ack (NOT_STARTED, no SLA judgement)
 
     Note over Engine: Later — event matches "anc-visit-1-referral-ack" → completed
     Engine->>SIS: completeStep(anc-visit-1-referral-ack)

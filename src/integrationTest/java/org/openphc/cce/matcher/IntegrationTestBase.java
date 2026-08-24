@@ -52,7 +52,7 @@ import java.util.UUID;
 public abstract class IntegrationTestBase {
 
     @Autowired
-    private ProtocolDefinitionRepository protocolDefinitionRepository;
+    protected ProtocolDefinitionRepository protocolDefinitionRepository;
 
     @Autowired
     private TriggerIndexRepository triggerIndexRepository;
@@ -187,12 +187,12 @@ public abstract class IntegrationTestBase {
      * longer live on the step row. A threshold passed as null gets no row.
      *
      * @param step       an already-persisted step
-     * @param dueDate    the PENDING_TO_OVERDUE threshold, or null
-     * @param missedDate the OVERDUE_TO_MISSED threshold, or null
+     * @param dueDate    the DUE_DATE_REACHED threshold, or null
+     * @param missedDate the MISSED_DATE_REACHED threshold, or null
      */
     protected void seedStepSchedule(StepInstance step, OffsetDateTime dueDate, OffsetDateTime missedDate) {
-        seedTransition(step, SlaTransitionType.PENDING_TO_OVERDUE, dueDate);
-        seedTransition(step, SlaTransitionType.OVERDUE_TO_MISSED, missedDate);
+        seedTransition(step, SlaTransitionType.DUE_DATE_REACHED, dueDate);
+        seedTransition(step, SlaTransitionType.MISSED_DATE_REACHED, missedDate);
     }
 
     private void seedTransition(StepInstance step, SlaTransitionType type, OffsetDateTime processBy) {
@@ -202,8 +202,6 @@ public abstract class IntegrationTestBase {
         transitionRepository.save(StepSlaStateTransition.builder()
                 .stepInstanceId(step.getId())
                 .transitionType(type)
-                .fromStatus(type.fromStatus().name())
-                .toStatus(type.toStatus().name())
                 .processBy(processBy)
                 .nextAttemptAt(processBy)
                 .build());

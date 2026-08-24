@@ -1,6 +1,5 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.AuditService;
 import org.openphc.cce.common.service.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -50,7 +49,6 @@ class MatcherEngineTest {
     @Mock private ProtocolInstanceService protocolInstanceService;
     @Mock private StepInstanceService stepInstanceService;
     @Mock private ParsedProtocolCache parsedProtocolCache;
-    @Mock private AuditService auditService;
     @Mock private IntelligenceActionEvaluator intelligenceActionEvaluator;
     @Mock private ClinicalEventTimeExtractor clinicalEventTimeExtractor;
 
@@ -66,7 +64,7 @@ class MatcherEngineTest {
         engine = new MatcherEngine(eventLogService, resourceInfoExtractor,
                 triggerMatchingService, expressionEvaluationService,
                 protocolDefinitionService, protocolInstanceService,
-                stepInstanceService, parsedProtocolCache, auditService,
+                stepInstanceService, parsedProtocolCache,
                 intelligenceActionEvaluator, clinicalEventTimeExtractor, meterRegistry);
     }
 
@@ -537,7 +535,6 @@ class MatcherEngineTest {
                 .id(UUID.randomUUID())
                 .patientId("patient-1")
                 .protocolDefinition(protocolDef)
-                .protocolCanonical(protocolDef.getUrl() + "|" + protocolDef.getVersion())
                 .status(ProtocolInstanceStatus.ACTIVE)
                 .enrolledAt(OffsetDateTime.now(ZoneOffset.UTC))
                 .build();
@@ -550,7 +547,6 @@ class MatcherEngineTest {
                 .actionId(actionId)
                 .repeatIndex(0)
                 .stepStatus(StepStatus.NOT_STARTED)
-                .slaStatus(SlaStatus.PENDING)
                 .build();
     }
 

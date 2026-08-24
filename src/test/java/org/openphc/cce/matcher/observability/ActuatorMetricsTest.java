@@ -1,7 +1,6 @@
 package org.openphc.cce.matcher.observability;
 
 import org.openphc.cce.common.service.SlaThresholdReader;
-import org.openphc.cce.common.service.AuditService;
 import org.openphc.cce.common.service.ActionDefinitionResolver;
 import org.openphc.cce.common.service.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -66,7 +65,7 @@ class ActuatorMetricsTest {
                 mock(MatcherEventLogService.class), mock(ResourceInfoExtractor.class),
                 mock(TriggerMatchingService.class), mock(ExpressionEvaluationService.class),
                 mock(ProtocolDefinitionService.class), mock(ProtocolInstanceService.class),
-                mock(StepInstanceService.class), mock(ParsedProtocolCache.class), mock(AuditService.class),
+                mock(StepInstanceService.class), mock(ParsedProtocolCache.class),
                 evaluator, mock(ClinicalEventTimeExtractor.class), registry);
 
         new IntelligenceTriggerProducer(

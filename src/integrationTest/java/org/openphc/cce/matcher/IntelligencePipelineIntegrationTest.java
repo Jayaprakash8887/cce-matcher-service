@@ -84,7 +84,14 @@ class IntelligencePipelineIntegrationTest extends IntegrationTestBase {
      * Returns the protocol instance for the intelligence PlanDefinition.
      */
     private ProtocolInstance enrollAndWait(String patientId) throws Exception {
-        String expectedCanonical = "http://openphc.org/PlanDefinition/anc-intelligence-integration|" + protocolVersion;
+        // The enrolment no longer stores the canonical, so match on the definition it points at.
+        // Reading only the id of a lazy association is safe on a detached entity — Hibernate answers
+        // it from the proxy without initializing it, which dereferencing getCanonical() would not.
+        UUID expectedDefinitionId = protocolDefinitionRepository
+                .findByUrlAndVersion("http://openphc.org/PlanDefinition/anc-intelligence-integration",
+                        protocolVersion)
+                .orElseThrow(() -> new AssertionError("intelligence PlanDefinition was not seeded"))
+                .getId();
 
         ObjectNode data = objectMapper.createObjectNode();
         data.put("resourceType", "Encounter");
@@ -108,12 +115,12 @@ class IntelligencePipelineIntegrationTest extends IntegrationTestBase {
         await().atMost(30, SECONDS).untilAsserted(() -> {
             List<ProtocolInstance> instances = protocolInstanceRepository.findAll().stream()
                     .filter(p -> patientId.equals(p.getPatientId())).toList();
-            assertThat(instances).anyMatch(i -> i.getProtocolCanonical().equals(expectedCanonical));
+            assertThat(instances).anyMatch(i -> expectedDefinitionId.equals(i.getProtocolDefinition().getId()));
         });
 
         return protocolInstanceRepository.findAll().stream()
                 .filter(p -> patientId.equals(p.getPatientId()))
-                .filter(i -> i.getProtocolCanonical().equals(expectedCanonical))
+                .filter(i -> expectedDefinitionId.equals(i.getProtocolDefinition().getId()))
                 .findFirst().orElseThrow();
     }
 
@@ -172,7 +179,6 @@ class IntelligencePipelineIntegrationTest extends IntegrationTestBase {
                     .actionId("step-with-no-intelligence-actions")
                     .repeatIndex(0)
                     .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
                     .requiredBehavior("must")
                     .build());
 

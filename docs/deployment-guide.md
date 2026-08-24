@@ -234,7 +234,7 @@ All CCE services share the same PostgreSQL database (`ccedb`) deployed by the [C
 
 The database and user are created by the collector service's Docker Compose. The matcher service only needs to run its Flyway migrations, which happen automatically on startup.
 
-> **Matcher service tables:** `protocol_definition`, `protocol_instance`, `step_instance`, `deviation`, `trigger_index`, `matcher_event_log`, `audit_log`, `action_definition`, `intelligence_event_log`, `facility`
+> **Matcher service tables:** `protocol_definition`, `protocol_instance`, `step_instance`, `deviation`, `trigger_index`, `matcher_event_log`, `action_definition`, `intelligence_event_log`, `facility`
 
 ### Schema Migrations
 
@@ -248,7 +248,7 @@ Flyway manages all schema migrations automatically on application startup.
 
 > **First deployment into a shared `ccedb`.** The service owns the tables `protocol_definition`,
 > `protocol_instance`, `step_instance`, `deviation`, `trigger_index`, `matcher_event_log`,
-> `action_definition`, `intelligence_event_log`, `facility`, `audit_log`,
+> `action_definition`, `intelligence_event_log`, `facility`,
 > `protocol_instance_history` and `step_instance_history`. `V1` creates them, so those names must
 > be free in the target database — the service cannot share them with another tenant of `ccedb`.
 

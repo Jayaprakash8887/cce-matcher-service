@@ -1,6 +1,5 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.AuditService;
 import org.openphc.cce.common.service.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.micrometer.core.instrument.Counter;
@@ -47,7 +46,6 @@ public class MatcherEngine {
     private final ProtocolInstanceService protocolInstanceService;
     private final StepInstanceService stepInstanceService;
     private final ParsedProtocolCache parsedProtocolCache;
-    private final AuditService auditService;
     private final IntelligenceActionEvaluator intelligenceActionEvaluator;
     private final ClinicalEventTimeExtractor clinicalEventTimeExtractor;
 
@@ -66,7 +64,6 @@ public class MatcherEngine {
                             ProtocolInstanceService protocolInstanceService,
                             StepInstanceService stepInstanceService,
                             ParsedProtocolCache parsedProtocolCache,
-                            AuditService auditService,
                             IntelligenceActionEvaluator intelligenceActionEvaluator,
                             ClinicalEventTimeExtractor clinicalEventTimeExtractor,
                             MeterRegistry meterRegistry) {
@@ -78,7 +75,6 @@ public class MatcherEngine {
         this.protocolInstanceService = protocolInstanceService;
         this.stepInstanceService = stepInstanceService;
         this.parsedProtocolCache = parsedProtocolCache;
-        this.auditService = auditService;
         this.intelligenceActionEvaluator = intelligenceActionEvaluator;
         this.clinicalEventTimeExtractor = clinicalEventTimeExtractor;
 
@@ -265,12 +261,6 @@ public class MatcherEngine {
         // Evaluate intelligence actions after step completion
         intelligenceActionEvaluator.evaluateOnCompletion(step, event.getData());
 
-        auditService.audit("MATCHER", "EVENT_MATCHED", "system",
-                "EventLog", eventLog.getId().toString(),
-                Map.of("protocolDefinitionId", match.protocolDefinitionId().toString(),
-                        "actionId", actionId,
-                        "protocolInstanceId", protocolInstance.getId().toString(),
-                        "patientId", patientId));
     }
 
     /**

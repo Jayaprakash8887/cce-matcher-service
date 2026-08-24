@@ -1,9 +1,9 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.AuditService;
 import jakarta.persistence.EntityNotFoundException;
 import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
+import org.openphc.cce.common.service.StateTransitionHistoryService;
 import org.openphc.cce.common.enums.ProtocolInstanceStatus;
 import org.openphc.cce.common.repository.ProtocolInstanceRepository;
 import org.slf4j.Logger;
@@ -23,14 +23,11 @@ public class ProtocolInstanceService {
     private static final Logger log = LoggerFactory.getLogger(ProtocolInstanceService.class);
 
     private final ProtocolInstanceRepository protocolInstanceRepository;
-    private final AuditService auditService;
     private final StateTransitionHistoryService stateTransitionHistoryService;
 
     public ProtocolInstanceService(ProtocolInstanceRepository protocolInstanceRepository,
-                                   AuditService auditService,
                                    StateTransitionHistoryService stateTransitionHistoryService) {
         this.protocolInstanceRepository = protocolInstanceRepository;
-        this.auditService = auditService;
         this.stateTransitionHistoryService = stateTransitionHistoryService;
     }
 
@@ -54,7 +51,6 @@ public class ProtocolInstanceService {
         ProtocolInstance instance = ProtocolInstance.builder()
                 .patientId(patientId)
                 .protocolDefinition(protocolDef)
-                .protocolCanonical(protocolDef.getCanonical())
                 .enrolledAt(enrolledAt)
                 .status(ProtocolInstanceStatus.ACTIVE)
                 .build();
@@ -64,11 +60,6 @@ public class ProtocolInstanceService {
         // Capture the initial ACTIVE status in append-only history.
         stateTransitionHistoryService.recordProtocolInstanceTransition(instance, instance.getEnrolledAt());
 
-        auditService.audit("MATCHER", "PROTOCOL_ENROLLED", "system",
-                "ProtocolInstance", instance.getId().toString(),
-                Map.of("patientId", patientId,
-                        "protocolCanonical", protocolDef.getCanonical(),
-                        "protocolDefinitionId", protocolDef.getId().toString()));
 
         log.info("Enrolled patient {} in protocol {} (instanceId={})",
                 patientId, protocolDef.getCanonical(), instance.getId());

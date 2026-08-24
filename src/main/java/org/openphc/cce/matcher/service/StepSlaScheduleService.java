@@ -59,8 +59,8 @@ public class StepSlaScheduleService {
      */
     public void schedule(StepInstance step, OffsetDateTime dueDate, OffsetDateTime missedDate) {
         List<StepSlaStateTransition> rows = new ArrayList<>(2);
-        addIfScheduled(rows, step.getId(), SlaTransitionType.PENDING_TO_OVERDUE, dueDate);
-        addIfScheduled(rows, step.getId(), SlaTransitionType.OVERDUE_TO_MISSED, missedDate);
+        addIfScheduled(rows, step.getId(), SlaTransitionType.DUE_DATE_REACHED, dueDate);
+        addIfScheduled(rows, step.getId(), SlaTransitionType.MISSED_DATE_REACHED, missedDate);
 
         if (rows.isEmpty()) {
             log.debug("Step {} (actionId={}) has no SLA thresholds — nothing scheduled",
@@ -81,8 +81,6 @@ public class StepSlaScheduleService {
         rows.add(StepSlaStateTransition.builder()
                 .stepInstanceId(stepInstanceId)
                 .transitionType(type)
-                .fromStatus(type.fromStatus().name())
-                .toStatus(type.toStatus().name())
                 .processBy(processBy)
                 .nextAttemptAt(processBy)
                 .build());

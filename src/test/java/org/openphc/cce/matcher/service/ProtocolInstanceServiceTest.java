@@ -1,6 +1,5 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.AuditService;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,6 +9,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.openphc.cce.common.entity.ProtocolDefinition;
+import org.openphc.cce.common.service.StateTransitionHistoryService;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.enums.ProtocolDefinitionStatus;
 import org.openphc.cce.common.enums.ProtocolInstanceStatus;
@@ -30,8 +30,6 @@ class ProtocolInstanceServiceTest {
     @Mock
     private ProtocolInstanceRepository protocolInstanceRepository;
 
-    @Mock
-    private AuditService auditService;
 
     @Mock
     private StateTransitionHistoryService stateTransitionHistoryService;
@@ -41,7 +39,7 @@ class ProtocolInstanceServiceTest {
     @BeforeEach
     void setUp() {
         service = new ProtocolInstanceService(protocolInstanceRepository,
-                auditService, stateTransitionHistoryService);
+                stateTransitionHistoryService);
     }
 
     @Nested
@@ -67,12 +65,12 @@ class ProtocolInstanceServiceTest {
             assertNotNull(result.getId());
             assertEquals("patient-1", result.getPatientId());
             assertEquals(ProtocolInstanceStatus.ACTIVE, result.getStatus());
-            assertEquals(protocolDef.getCanonical(), result.getProtocolCanonical());
+            // The canonical is not stored on the enrolment; it is the definition's, reached by FK.
+            assertEquals(protocolDef.getCanonical(),
+                    result.getProtocolDefinition().getCanonical());
             assertEquals(enrolledAt, result.getEnrolledAt());
 
             verify(protocolInstanceRepository).save(any(ProtocolInstance.class));
-            verify(auditService).audit(eq("MATCHER"), eq("PROTOCOL_ENROLLED"),
-                    eq("system"), eq("ProtocolInstance"), anyString(), anyMap());
             // The initial ACTIVE status is recorded in append-only history at the enrollment time.
             verify(stateTransitionHistoryService).recordProtocolInstanceTransition(result, enrolledAt);
         }
@@ -96,8 +94,6 @@ class ProtocolInstanceServiceTest {
 
             assertSame(existing, result);
             verify(protocolInstanceRepository, never()).save(any());
-            verify(auditService, never()).audit(anyString(), anyString(), anyString(),
-                    anyString(), anyString(), anyMap());
             verify(stateTransitionHistoryService, never()).recordProtocolInstanceTransition(any(), any());
         }
     }
@@ -141,7 +137,6 @@ class ProtocolInstanceServiceTest {
                 .id(id)
                 .patientId("patient-1")
                 .protocolDefinition(buildProtocolDefinition())
-                .protocolCanonical("http://openphc.org/PlanDefinition/anc-high-risk|1.0.0")
                 .status(status)
                 .build();
     }

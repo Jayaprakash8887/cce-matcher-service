@@ -196,7 +196,8 @@ workspace/
 │       ├── event/        # CloudEventMessage, IntelligenceTriggerEvent (Kafka contracts)
 │       ├── kafka/        # IntelligenceTriggerProducer, KafkaTopicProperties
 │       ├── fhir/         # PlanDefinitionParser, ParsedProtocolCache, expression evaluation
-│       ├── service/      # AuditService, DeviationService, IntelligenceActionEvaluator,
+│       ├── service/      # DeviationService, StateTransitionHistoryService,
+│       │                 # IntelligenceActionEvaluator,
 │       │                 #   ActionDefinitionResolver, SlaThresholdReader
 │       ├── config/       # AppConfig, FhirConfig, KafkaRetryProperties
 │       ├── web/          # ErrorResponse, GlobalExceptionHandler

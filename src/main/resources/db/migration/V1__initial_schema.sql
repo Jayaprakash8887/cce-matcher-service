@@ -32,7 +32,6 @@
 CREATE TABLE protocol_instance (
     id                      UUID            NOT NULL,
     patient_id              VARCHAR         NOT NULL,
-    protocol_canonical      VARCHAR         NOT NULL,
     protocol_definition_id  UUID            NOT NULL,
     enrolled_at             TIMESTAMPTZ     NOT NULL,
     status                  VARCHAR         NOT NULL,
@@ -57,7 +56,7 @@ ALTER TABLE protocol_instance REPLICA IDENTITY FULL;
 -- 2. matcher_event_log
 -- =============================================
 -- Lean idempotency log for inbound CloudEvents. Created before step_instance so the
--- completed_by_event_id foreign key can be declared inline.
+-- matched_event_id foreign key can be declared inline.
 -- =============================================
 CREATE TABLE matcher_event_log (
     id                          UUID            NOT NULL DEFAULT gen_random_uuid(),
@@ -83,15 +82,21 @@ ALTER TABLE matcher_event_log REPLICA IDENTITY FULL;
 -- A step carries two independent statuses:
 --
 --   step_status  NOT_STARTED | COMPLETED               — has the expected event arrived?
---   sla_status   PENDING | OVERDUE | MISSED | MET     — has the deadline been met?
+--   sla_status   NULL | OVERDUE | MISSED | MET         — has the deadline been met?
 --
 -- step_status uses the FHIR R4 CarePlanActivityStatus codes (not-started / completed); a
 -- step_instance is an occurrence of a PlanDefinition action, i.e. a care-plan activity.
 --
--- The SLA advances PENDING → OVERDUE at the due date and OVERDUE → MISSED at the missed date
--- (= due date + tolerance-days), and settles as MET when the event arrives before the due date or
--- when an optional ("could") step is closed out without one. Because the two are independent,
--- a step can be COMPLETED + MISSED (recorded late) or NOT_STARTED + MET (optional, closed out).
+-- sla_status is NULL until a threshold falls due: null is not a status but the absence of a
+-- judgement, and it is also the resting state of a step that has no SLA at all (no due date means
+-- no step_sla_state_transition rows, so nothing will ever judge it).
+--
+-- The Compliance Service is its ONLY writer. At the due date a step completed before it becomes MET
+-- and one not completed becomes OVERDUE; at the missed date (= due date + tolerance-days) a still
+-- unrecorded 'must' step becomes MISSED. Matcher records that the work happened and when, never
+-- whether it was timely — so the two services never write this column's value from different
+-- evidence. Because the two statuses are independent, a step can be COMPLETED + MISSED (recorded
+-- after being written off).
 --
 -- Both thresholds live on step_sla_state_transition (§5) rather than here, so the service that
 -- evaluates due work selects from a table that shrinks as work is processed instead of rescanning
@@ -103,11 +108,13 @@ CREATE TABLE step_instance (
     action_id               VARCHAR         NOT NULL,
     repeat_index            INTEGER         NOT NULL DEFAULT 0,
     step_status             VARCHAR         NOT NULL,
-    sla_status              VARCHAR         NOT NULL,
+    -- Nullable: null means no threshold has fallen due, so timeliness is not yet judged.
+    -- Written only by the Compliance Service. Stays null for a step with no SLA at all.
+    sla_status              VARCHAR,
     -- SLA thresholds are not denormalized here; each is a step_sla_state_transition row (see §5).
     completed_at            TIMESTAMPTZ,
     completed_by_source     VARCHAR,
-    completed_by_event_id   UUID,
+    matched_event_id   UUID,
     required_behavior       VARCHAR,
     created_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
@@ -115,25 +122,26 @@ CREATE TABLE step_instance (
     CONSTRAINT step_instance_pkey PRIMARY KEY (id),
     CONSTRAINT step_instance_protocol_instance_id_fkey
         FOREIGN KEY (protocol_instance_id) REFERENCES protocol_instance(id),
-    CONSTRAINT step_instance_completed_by_event_id_fkey
-        FOREIGN KEY (completed_by_event_id) REFERENCES matcher_event_log(id),
+    CONSTRAINT step_instance_matched_event_id_fkey
+        FOREIGN KEY (matched_event_id) REFERENCES matcher_event_log(id),
     CONSTRAINT step_instance_step_status_check
         CHECK (step_status IN ('NOT_STARTED', 'COMPLETED')),
     CONSTRAINT step_instance_sla_status_check
-        CHECK (sla_status IN ('PENDING', 'OVERDUE', 'MISSED', 'MET')),
+        CHECK (sla_status IN ('OVERDUE', 'MISSED', 'MET')),
     CONSTRAINT step_instance_required_behavior_check
         CHECK (required_behavior IN ('must', 'could', 'must-unless-documented'))
 );
 
 CREATE INDEX idx_step_instance_protocol ON step_instance (protocol_instance_id);
 -- Steps whose SLA can still move: MET and MISSED have no threshold left to cross.
+-- The steps whose SLA can still move: not yet judged, or overdue but not yet written off.
 CREATE INDEX idx_step_instance_sla_status ON step_instance (sla_status)
-    WHERE sla_status IN ('PENDING', 'OVERDUE');
+    WHERE sla_status IS NULL OR sla_status = 'OVERDUE';
 -- Locating the step a late-arriving event should complete.
 CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_id, action_id)
     WHERE step_status = 'NOT_STARTED';
-CREATE INDEX idx_step_instance_completed_event ON step_instance (completed_by_event_id)
-    WHERE completed_by_event_id IS NOT NULL;
+CREATE INDEX idx_step_instance_completed_event ON step_instance (matched_event_id)
+    WHERE matched_event_id IS NOT NULL;
 
 ALTER TABLE step_instance REPLICA IDENTITY FULL;
 
@@ -148,22 +156,26 @@ ALTER TABLE step_instance REPLICA IDENTITY FULL;
 -- than a scan of every step row) and a durable record of when each deadline fell and when it was
 -- applied — rows are retained, never deleted.
 --
--- Ownership: the Matcher Service only ever INSERTs here. Deciding which rows are due, updating
+-- Ownership: the Matcher Service only ever INSERTs here. Deciding which rows are due, writing
 -- step_instance.sla_status, recording the OVERDUE / MISSED deviation, and updating is_processed /
 -- processed_at / attempts / next_attempt_at all belong to the service that evaluates them. One writer
 -- per column, so the evaluator can claim rows without racing us.
 --
--- A step may complete before its row is processed. The evaluator then judges the step against
--- step_instance.completed_at rather than the wall clock: completed at or after process_by is a breach and
--- the transition still fires, completed before it is not and the row is consumed. Matcher never moves a
--- completed step's sla_status — completion already settled it against this same threshold.
+-- transition_type names the deadline, not a from/to status pair. There are deliberately no from_status
+-- and to_status columns: crossing the due date lands a step completed before it on MET and one still
+-- outstanding on OVERDUE, so a single destination per type never held. The outcome of applying a row is
+-- readable from step_instance.sla_status; what this table records is which deadline fell and when.
+--
+-- A step usually completes before its row is processed, and that is the point: the evaluator compares
+-- step_instance.completed_at against process_by rather than consulting the wall clock. Completed at or
+-- after process_by breached that deadline; completed before it did not. Only the due-date row can settle
+-- an SLA as MET — beating the missed date merely means the step was not written off, and a step
+-- completed between its two thresholds stays the OVERDUE the due-date row made it.
 -- =============================================
 CREATE TABLE step_sla_state_transition (
     id                  UUID            NOT NULL,
     step_instance_id    UUID            NOT NULL,
     transition_type     VARCHAR         NOT NULL,
-    from_status         VARCHAR         NOT NULL,
-    to_status           VARCHAR         NOT NULL,
 
     -- Absolute, clinical-time-anchored threshold. Immutable: the audit truth for when the deadline fell.
     process_by          TIMESTAMPTZ     NOT NULL,
@@ -190,11 +202,7 @@ CREATE TABLE step_sla_state_transition (
         FOREIGN KEY (step_instance_id) REFERENCES step_instance(id),
 
     CONSTRAINT step_sla_state_transition_type_check
-        CHECK (transition_type IN ('PENDING_TO_OVERDUE', 'OVERDUE_TO_MISSED')),
-    CONSTRAINT step_sla_state_transition_from_status_check
-        CHECK (from_status IN ('PENDING', 'OVERDUE')),
-    CONSTRAINT step_sla_state_transition_to_status_check
-        CHECK (to_status IN ('OVERDUE', 'MISSED'))
+        CHECK (transition_type IN ('DUE_DATE_REACHED', 'MISSED_DATE_REACHED'))
 );
 
 -- The evaluator's claim path, and the only hot index: partial on the unprocessed set, so the query
@@ -210,7 +218,7 @@ ALTER TABLE step_sla_state_transition REPLICA IDENTITY FULL;
 -- =============================================
 CREATE TABLE deviation (
     id                      UUID            NOT NULL,
-    protocol_instance_id    UUID            NOT NULL,
+    -- No protocol_instance_id: reachable as step_instance.protocol_instance_id.
     step_instance_id        UUID            NOT NULL,
     deviation_type          VARCHAR         NOT NULL,
     detected_at             TIMESTAMPTZ     NOT NULL DEFAULT now(),
@@ -219,8 +227,6 @@ CREATE TABLE deviation (
     updated_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
 
     CONSTRAINT deviation_pkey PRIMARY KEY (id),
-    CONSTRAINT deviation_protocol_instance_id_fkey
-        FOREIGN KEY (protocol_instance_id) REFERENCES protocol_instance(id),
     CONSTRAINT deviation_step_instance_id_fkey
         FOREIGN KEY (step_instance_id) REFERENCES step_instance(id),
     CONSTRAINT deviation_type_check CHECK (deviation_type IN ('OVERDUE', 'MISSED', 'ORDER_VIOLATION')),
@@ -229,7 +235,6 @@ CREATE TABLE deviation (
     CONSTRAINT deviation_step_type_key UNIQUE (step_instance_id, deviation_type)
 );
 
-CREATE INDEX idx_deviation_protocol ON deviation (protocol_instance_id);
 CREATE INDEX idx_deviation_type ON deviation (deviation_type);
 
 ALTER TABLE deviation REPLICA IDENTITY FULL;
@@ -251,7 +256,7 @@ CREATE TABLE intelligence_event_log (
     action_type                 VARCHAR         NOT NULL,
     intelligence_destination    VARCHAR         NOT NULL,
     step_status                 VARCHAR         NOT NULL,
-    sla_status                  VARCHAR         NOT NULL,
+    sla_status                  VARCHAR,
     trigger_reason              VARCHAR         NOT NULL,
     step_action_id              VARCHAR,
     evaluation_expression       TEXT,
@@ -316,7 +321,9 @@ CREATE TABLE step_instance_history (
     id                      BIGSERIAL       NOT NULL,
     step_instance_id        UUID            NOT NULL,
     step_status             VARCHAR         NOT NULL,
-    sla_status              VARCHAR         NOT NULL,
+    -- Nullable: null means no threshold has fallen due, so timeliness is not yet judged.
+    -- Written only by the Compliance Service. Stays null for a step with no SLA at all.
+    sla_status              VARCHAR,
     changed_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
 
     CONSTRAINT step_instance_history_pkey PRIMARY KEY (id)

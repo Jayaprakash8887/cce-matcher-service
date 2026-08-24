@@ -648,7 +648,7 @@ Each `definitionCanonical` referenced in the PlanDefinition must have a register
 | ActivityDefinition type | `kind` | `CommunicationRequest`, `Task`, `ServiceRequest` |
 | Canonical reference format | `definitionCanonical` | `<url>|<version>` |
 
-`requiredBehavior` note: `must` drives the "must"-only predecessor backfill gating in `StepInstanceService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`); `could` lets `StepInstanceService` auto-skip an optional step instead of marking it missed. `must-unless-documented` is a valid FHIR `requiredBehavior` code and is accepted (see the `data-dictionary.md` `required_behavior` check constraint), but the parser and services do not currently branch on it — it behaves like a step with no special required-behavior handling.
+`requiredBehavior` note: `must` drives the "must"-only predecessor backfill gating in `StepInstanceService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`); `could` keeps a step out of progressive instantiation entirely — an optional step is never pre-created, only materialized on the fly if its own trigger fires — and exempts it from the `MISSED` status and deviation when its missed threshold falls. `must-unless-documented` is a valid FHIR `requiredBehavior` code and is accepted (see the `data-dictionary.md` `required_behavior` check constraint), but the parser and services do not currently branch on it — it behaves like a step with no special required-behavior handling.
 
 ---
 

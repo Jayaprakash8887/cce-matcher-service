@@ -30,20 +30,28 @@ schema. See [Deployment Guide](../docs/deployment-guide.md).
 | `compliance_event_log` | renamed `matcher_event_log` |
 | `state`/`completion_status` on `step_instance_history` | `step_status`/`sla_status` |
 | `step_state` on `intelligence_event_log` | `step_status`/`sla_status` |
+| `step_instance.completed_by_event_id` | renamed `matched_event_id` — the column is set whenever an event matches, and matching is what it records |
+| `protocol_instance.protocol_canonical` | dropped; reached by FK as `protocol_definition.url\|version`, which also gives the version enrolled under rather than the current one |
+| `deviation.protocol_instance_id` | dropped; reachable as `step_instance.protocol_instance_id`, which is `NOT NULL` |
+| `audit_log` | dropped; the append-only history tables carry state transitions, and actor attribution is planned to move onto the domain tables |
 
 The pair is what makes "completed, but late" representable — the old single column could not express
 it. Background: [Architecture Overview §4](../../cce-common-util/docs/architecture-overview.md#4-step-status-and-sla-status).
+
+The last four rows are applied by §8 and §9 of the migration, which run last: they are the final step
+of the cutover, after the tables above are in their new shape. `audit_log` is dropped by its own
+statement so an operator who wants to retain the 1.x trail can comment out just that one line.
 
 ### How each old state maps
 
 | Old `state` | `step_status` | `sla_status` | Reasoning |
 |---|---|---|---|
-| `PENDING` | `NOT_STARTED` | `PENDING` | |
-| `DUE` | `NOT_STARTED` | `PENDING` | `DUE` and `PENDING` always meant the same thing |
+| `PENDING` | `NOT_STARTED` | *null* | 2.0.0 has no `PENDING`: a null `sla_status` is the absence of a judgement |
+| `DUE` | `NOT_STARTED` | *null* | `DUE` and `PENDING` always meant the same thing, and both are now null |
 | `OVERDUE` | `NOT_STARTED` | `OVERDUE` | |
 | `MISSED` | `NOT_STARTED` | `MISSED` | |
-| `SKIPPED` | `NOT_STARTED` | `MET` | An optional step allowed to lapse breached nothing. It stays `NOT_STARTED` because the work did not happen |
-| `COMPLETED` | `COMPLETED` | derived from `completed_at` vs `due_date`/`missed_date` | Timestamps, not `completion_status` — the same judgement the runtime makes when it settles a completed step |
+| `SKIPPED` | `NOT_STARTED` | `MET` | An optional step allowed to lapse breached nothing. It stays `NOT_STARTED` because the work did not happen. 2.0.0 no longer produces this state — optional steps are never pre-created — but the 1.x rows are preserved as they were |
+| `COMPLETED` | `COMPLETED` | derived from `completed_at` vs `due_date`/`missed_date` | Timestamps, not `completion_status` — the same judgement the Compliance Service makes when a threshold falls due |
 
 A completed step with **neither** `completed_at` nor `completion_status` cannot be decided either way.
 The migration fails on those rather than guessing, because a wrong `MET` hides a real breach. Resolve
@@ -55,19 +63,19 @@ Each step with a deadline gets its `step_sla_state_transition` rows. A transitio
 system already applied is inserted **already processed** — leaving it pending would make the Compliance
 Service re-apply it and record a deviation the monolith's scheduler had already recorded.
 
-| Step after mapping | `PENDING_TO_OVERDUE` | `OVERDUE_TO_MISSED` |
+| Step after mapping | `DUE_DATE_REACHED` | `MISSED_DATE_REACHED` |
 |---|---|---|
-| `NOT_STARTED`/`PENDING`, deadline ahead | pending | pending |
-| `NOT_STARTED`/`OVERDUE` | processed | pending |
-| `NOT_STARTED`/`MISSED` | processed | processed |
+| `NOT_STARTED`, null sla, deadline ahead | pending | pending |
+| `NOT_STARTED`, `OVERDUE` | processed | pending |
+| `NOT_STARTED`, `MISSED` | processed | processed |
 | `COMPLETED` (any) | processed | processed |
 
 ---
 
 ## Expected side effect: a burst of OVERDUE deviations
 
-Steps that were sitting in the old `DUE` state become `NOT_STARTED`/`PENDING` with a deadline already
-in the past, so the Compliance Service's first sweep moves them to `OVERDUE` and records a deviation.
+Steps that were sitting in the old `DUE` state become `NOT_STARTED` with a null `sla_status` and a
+deadline already in the past, so the Compliance Service's first sweep moves them to `OVERDUE` and records a deviation.
 
 **This is correct.** `DUE` was not treated as a breach in 1.x; in 2.0.0 a step past its due date and
 not started is overdue. Nothing is being double-counted — steps that were already `OVERDUE` or

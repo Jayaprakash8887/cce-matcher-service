@@ -76,24 +76,28 @@ cce.events.inbound → InboundEventConsumer → MatcherEngine
                                               │   └── Intelligence Evaluation (IntelligenceActionEvaluator *)
                                               ├── Intelligence Publishing (IntelligenceTriggerProducer *
                                               │                            → cce.intelligence.triggers)
-                                              └── Audit Logging (AuditService *, after commit)
+                                              └── State history (StateTransitionHistoryService *)
 
 Startup + every 60s: ProtocolDefinitionService.refreshProtocolCaches()
                        └── reconciles ParsedProtocolCache * + condition-only triggers against the DB
 ```
 
 **Owned elsewhere.** Protocol and action-definition management (writes to `protocol_definition`,
-`trigger_index`, `action_definition`) belongs to the CCE Protocol Service. Time-based SLA
-transitions — advancing `sla_status` and recording the `OVERDUE`/`MISSED` deviations — belong to the
-**CCE Compliance Service**, which claims the `step_sla_state_transition` rows this service writes.
+`trigger_index`, `action_definition`) belongs to the CCE Protocol Service.
+
+`step_instance.sla_status` belongs entirely to the **CCE Compliance Service**, which claims the
+`step_sla_state_transition` rows this service writes. This service records *that* a step completed and
+*when* (`completed_at`, from the clinical occurrence time) and never judges whether that was timely —
+so a freshly completed step's `sla_status` is null until its due date falls and Compliance compares the
+two. One writer, one source of evidence.
 
 ## Testing
 
 ```bash
-# Unit tests (206 tests — shared-code tests live in cce-common-util)
+# Unit tests (198 tests — shared-code tests live in cce-common-util)
 ./gradlew test
 
-# Integration tests (10 tests, EmbeddedKafka + H2)
+# Integration tests (9 tests, EmbeddedKafka + H2)
 ./gradlew integrationTest
 
 # Full build — runs unit tests, integration tests, and the coverage gate

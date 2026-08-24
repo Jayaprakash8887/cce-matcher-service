@@ -53,16 +53,16 @@ class StepSlaScheduleServiceTest {
             Map<SlaTransitionType, StepSlaStateTransition> rows = captureRows();
             assertEquals(2, rows.size());
 
-            StepSlaStateTransition toOverdue = rows.get(SlaTransitionType.PENDING_TO_OVERDUE);
+            StepSlaStateTransition toOverdue = rows.get(SlaTransitionType.DUE_DATE_REACHED);
             assertEquals(step.getId(), toOverdue.getStepInstanceId());
             assertEquals(due, toOverdue.getProcessBy());
-            assertEquals(SlaStatus.PENDING.name(), toOverdue.getFromStatus());
-            assertEquals(SlaStatus.OVERDUE.name(), toOverdue.getToStatus());
+            // The row names the deadline, not a from/to pair: what crossing it means for the step is
+            // decided when Compliance applies it, and read back from step_instance.sla_status.
+            assertEquals(SlaStatus.OVERDUE, SlaTransitionType.DUE_DATE_REACHED.breachStatus());
 
-            StepSlaStateTransition toMissed = rows.get(SlaTransitionType.OVERDUE_TO_MISSED);
+            StepSlaStateTransition toMissed = rows.get(SlaTransitionType.MISSED_DATE_REACHED);
             assertEquals(missed, toMissed.getProcessBy());
-            assertEquals(SlaStatus.OVERDUE.name(), toMissed.getFromStatus());
-            assertEquals(SlaStatus.MISSED.name(), toMissed.getToStatus());
+            assertEquals(SlaStatus.MISSED, SlaTransitionType.MISSED_DATE_REACHED.breachStatus());
         }
 
         @Test
@@ -72,7 +72,7 @@ class StepSlaScheduleServiceTest {
 
             service.schedule(step, due, null);
 
-            StepSlaStateTransition row = captureRows().get(SlaTransitionType.PENDING_TO_OVERDUE);
+            StepSlaStateTransition row = captureRows().get(SlaTransitionType.DUE_DATE_REACHED);
             // This service never marks a row done — that belongs to the evaluating service.
             assertFalse(row.isProcessed());
             assertNull(row.getProcessedAt());
@@ -92,7 +92,7 @@ class StepSlaScheduleServiceTest {
             // An absent threshold gets no row — there is nothing for the evaluator to fire.
             Map<SlaTransitionType, StepSlaStateTransition> rows = captureRows();
             assertEquals(1, rows.size());
-            assertTrue(rows.containsKey(SlaTransitionType.PENDING_TO_OVERDUE));
+            assertTrue(rows.containsKey(SlaTransitionType.DUE_DATE_REACHED));
         }
 
         @Test
@@ -119,8 +119,6 @@ class StepSlaScheduleServiceTest {
                 .id(UUID.randomUUID())
                 .stepInstanceId(stepId)
                 .transitionType(type)
-                .fromStatus(type.fromStatus().name())
-                .toStatus(type.toStatus().name())
                 .processBy(processBy)
                 .nextAttemptAt(processBy)
                 .build();
@@ -132,7 +130,6 @@ class StepSlaScheduleServiceTest {
                 .actionId("bp-check")
                 .repeatIndex(0)
                 .stepStatus(StepStatus.NOT_STARTED)
-                .slaStatus(SlaStatus.PENDING)
                 .build();
     }
 }

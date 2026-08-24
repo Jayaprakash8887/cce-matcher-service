@@ -23,7 +23,6 @@ sequenceDiagram
     participant ProtoInst as ProtocolInstanceService
     participant StepInst as StepInstanceService
     participant Intel as IntelligenceActionEvaluator
-    participant Audit as AuditService
     participant DB as PostgreSQL
 
     EHR->>Kafka: Publish clinical event<br/>(CloudEvents v1.0)
@@ -100,7 +99,7 @@ sequenceDiagram
         end
 
         rect rgb(240, 255, 240)
-            Note over Engine,Audit: Step 6 — Process Result
+            Note over Engine,Intel: Step 6 — Process Result
             alt One or more matches
                 loop For each matched (protocolDefinitionId, actionId)
                     Engine->>ProtoInst: enrollPatient(patientId, protocolDef, occurredAt)
@@ -113,16 +112,15 @@ sequenceDiagram
                     Engine->>StepInst: findActionableStep(protocolInstanceId, actionId)
                     alt No actionable step exists yet
                         Engine->>StepInst: createStep(protocol, actionId, 0, now, ...)
-                        StepInst->>DB: INSERT INTO step_instance (state=PENDING)
+                        StepInst->>DB: INSERT INTO step_instance (step_status=NOT_STARTED, sla_status=NULL)
                     end
 
                     Engine->>StepInst: completeStep(step, eventLogId, source, occurredAt)
-                    Note over StepInst: Single call — internally sets completed_at (clinical time,<br/>clamped to now), detects order violations, runs progressive<br/>instantiation of mandatory dependents (see §9), auto-skips<br/>preceding optional (could) steps, backfills unrecorded<br/>mandatory predecessors as PENDING (see §9)
-                    StepInst->>DB: UPDATE step_instance SET state=COMPLETED
+                    Note over StepInst: Single call — internally sets completed_at (clinical time,<br/>clamped to now), detects order violations, runs progressive<br/>instantiation of mandatory dependents (see §9), backfills<br/>unrecorded mandatory predecessors (see §9). Does NOT set<br/>sla_status — timeliness is the Compliance Service's call
+                    StepInst->>DB: UPDATE step_instance SET step_status=COMPLETED,<br/>completed_at, matched_event_id
 
                     Engine->>Intel: evaluateOnCompletion(step, eventPayload)
 
-                    Engine->>Audit: auditSystem("event.processing", "matched", ...)
                 end
                 Engine->>EventLog: updateStatus(eventLog, MATCHED)
             else No Matches
@@ -249,7 +247,7 @@ flowchart TD
     I -->|"No active step"| K["Create new<br/>StepInstance"]
 
     K --> L["Calculate repeatIndex"]
-    L --> N["Create StepInstance — step_status = NOT_STARTED,<br/>sla_status = PENDING (createStep always starts here)<br/>+ schedule its SLA transition rows (see §3)"]
+    L --> N["Create StepInstance — step_status = NOT_STARTED,<br/>sla_status = NULL (nothing judged yet)<br/>+ schedule its SLA transition rows (see §3)"]
 
     J --> P["completeStep()"]
     N --> P
@@ -262,10 +260,10 @@ flowchart TD
     Q -->|"dueDate ≤ completedAt &lt; missedDate<br/>— recorded late"| OD["sla_status = OVERDUE"]
     Q -->|"completedAt ≥ missedDate<br/>— recorded after being written off"| MI["sla_status = MISSED"]
 
-    MET --> W["Set completedAt, completedBySource,<br/>completedByEventId"]
+    MET --> W["Set completedAt, completedBySource,<br/>matchedEventId"]
     OD --> W
     MI --> W
-    W --> X["Record the transition in step_instance_history<br/>+ audit STEP_COMPLETED"]
+    W --> X["Record the transition in step_instance_history"]
 ```
 
 **The two statuses are independent.** `step_status` answers *did the work happen?* and is always
@@ -294,11 +292,10 @@ flowchart TD
 
     RD["DeviationService.createDeviation()"]
     RD --> DX{"Deviation of this type<br/>already exists for step?"}
-    DX -->|"Yes (redelivery / concurrent)"| DXR["Return DeviationResult(existing, created=false)<br/>— no insert, no audit, caller skips intelligence eval"]
-    DX -->|"No"| D1["Build Deviation: type, detectedAt = now(),<br/>metadata from the caller,<br/>linked to ProtocolInstance + StepInstance"]
+    DX -->|"Yes (redelivery / concurrent)"| DXR["Return DeviationResult(existing, created=false)<br/>— no insert, caller skips intelligence eval"]
+    DX -->|"No"| D1["Build Deviation: type, detectedAt = now(),<br/>metadata from the caller,<br/>linked to the StepInstance (the enrolment is reached through it)"]
     D1 --> D6["Persist to DB"]
-    D6 --> D7["Audit: DEVIATION_DETECTED"]
-    D7 --> D8["Caller evaluates intelligence actions<br/>(IntelligenceActionEvaluator), created=true only"]
+    D6 --> D8["Caller evaluates intelligence actions<br/>(IntelligenceActionEvaluator), created=true only"]
 ```
 
 ## 6. Intelligence Action Evaluation & Trigger Publishing
@@ -450,7 +447,7 @@ flowchart TD
     MATCH["Tier 1/2 match returns actionId"] --> NORMAL["Standard step processing<br/>(Section 1, Step 6)"]
     NORMAL --> COMPLETE["completeStep(step)"]
     COMPLETE --> DEPS["createDependentSteps()<br/>(find steps declaring this step id as their prerequisite)"]
-    DEPS --> CREATED["Create dependent steps (PENDING)"]
+    DEPS --> CREATED["Create dependent steps (NOT_STARTED, sla NULL)"]
     CREATED --> BACKFILL["backfillMissingMandatorySteps()<br/>(see 'Unrecorded Mandatory Predecessor Backfill' below)"]
 ```
 
@@ -465,14 +462,14 @@ flowchart TD
     LOOP --> DEDUP{"An instance for this step<br/>already exists?"}
     DEDUP -->|"Yes"| SKIP["Skip — avoid duplicate<br/>(already created reactively via its own<br/>trigger, or by a redelivered predecessor)"]
     DEDUP -->|"No"| MUST{"dependent step's<br/>requiredBehavior == must?"}
-    MUST -->|"No (could / unspecified)"| SKIP2["Skip pre-creation — a dangling PENDING row could<br/>later go MISSED even though its event never<br/>arrives; created on the fly if its own trigger fires"]
-    MUST -->|"Yes"| FANIN{"Any OTHER prerequisite still outstanding<br/>(NOT_STARTED + sla PENDING/OVERDUE)?"}
+    MUST -->|"No (could / unspecified)"| SKIP2["Skip pre-creation — a dangling row could later go<br/>MISSED even though its event never arrives;<br/>created on the fly if its own trigger fires"]
+    MUST -->|"Yes"| FANIN{"Any OTHER prerequisite still outstanding<br/>(NOT_STARTED + sla NULL/OVERDUE)?"}
     FANIN -->|"Yes"| SKIP3["Defer — that prerequisite's own completion<br/>re-runs this, so the due date anchors to<br/>the LAST prerequisite to finish"]
     FANIN -->|"No"| CALC["Calculate due date from the dependent step's own<br/>offset + relationship<br/>(after-end → completedAt [clinical time], after-start → dueDate)"]
     CALC --> RECURRING{"TimingInfo.count > 1?"}
 
     RECURRING -->|"Yes"| MULTI["Create N recurring instances with staggered due dates"]
-    RECURRING -->|"No"| SINGLE["createStep(dependent, due, missed) — state=PENDING<br/>+ schedules its transition rows"]
+    RECURRING -->|"No"| SINGLE["createStep(dependent, due, missed) — sla NULL<br/>+ schedules its transition rows"]
 
     MULTI --> NEXT["Continue to next"]
     SINGLE --> NEXT
@@ -485,7 +482,7 @@ flowchart TD
 
 ### Unrecorded Mandatory Predecessor Backfill (backfillMissingMandatorySteps)
 
-Progressive instantiation only works *forward*, so a step created reactively from its own trigger leaves the mandatory steps that should have preceded it with no `step_instance` row — invisible both in the journey view ("not started") and to the SLA evaluator, having no scheduled transition. After every completion, mandatory predecessors of the observed progress that have no row are materialized as `PENDING`. See `architecture-overview.md` §6.1 for the full rationale.
+Progressive instantiation only works *forward*, so a step created reactively from its own trigger leaves the mandatory steps that should have preceded it with no `step_instance` row — invisible both in the journey view ("not started") and to the SLA evaluator, having no scheduled transition. After every completion, mandatory predecessors of the observed progress that have no row are materialized as `NOT_STARTED` with no SLA judgement. See `architecture-overview.md` §6.1 for the full rationale.
 
 ```mermaid
 flowchart TD
@@ -495,9 +492,9 @@ flowchart TD
     MISSING -->|"No"| DONE["Return — nothing to backfill"]
     MISSING -->|"Yes"| LOOP{"For each missing<br/>mandatory step"}
     LOOP --> DATES["due = completedStep.completed_at (clinical time)<br/>missed = due + tolerance-days (no row if unset)<br/>written as step_sla_state_transition rows"]
-    DATES --> CREATE["createStep(stepId, repeatIndex 0) — state=PENDING"]
+    DATES --> CREATE["createStep(stepId, repeatIndex 0) — sla NULL"]
     CREATE --> LOOP
-    LOOP -->|"Done"| DONE2["Their transition rows now exist, so the evaluator<br/>drives sla PENDING → OVERDUE → MISSED (deviation),<br/>or a late event completes them (sla keeps the breach)"]
+    LOOP -->|"Done"| DONE2["Their transition rows now exist, so Compliance drives<br/>sla NULL → OVERDUE → MISSED (deviation), judging any<br/>late completion against the completed_at Matcher recorded"]
 ```
 
 > Steps still **ahead** in the chain are deliberately excluded — backfilling them would stamp them with this completion's time and flatten the schedule their own `relatedAction` offsets define. They are left to progressive instantiation.

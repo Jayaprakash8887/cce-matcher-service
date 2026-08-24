@@ -1,12 +1,12 @@
 package org.openphc.cce.matcher.service;
 
 import org.openphc.cce.common.service.SlaThresholdReader;
-import org.openphc.cce.common.service.AuditService;
 import org.openphc.cce.common.service.DeviationService;
 import org.openphc.cce.common.service.IntelligenceActionEvaluator;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.StepInstance;
+import org.openphc.cce.common.service.StateTransitionHistoryService;
 import org.openphc.cce.common.enums.DeviationType;
 import org.openphc.cce.common.enums.SlaStatus;
 import org.openphc.cce.common.enums.StepStatus;
@@ -36,16 +36,17 @@ public class StepInstanceService {
     private static final Logger log = LoggerFactory.getLogger(StepInstanceService.class);
 
     /**
-     * SLA statuses that can still move. {@link SlaStatus#MET} and {@link SlaStatus#MISSED} have no
-     * threshold left to cross, so a step in either is settled.
+     * SLA statuses that can still move: a null status (no threshold judged yet) and {@link
+     * SlaStatus#OVERDUE}. {@link SlaStatus#MET} and {@link SlaStatus#MISSED} are settled outcomes with
+     * no threshold left to cross.
      */
-    private static final Set<SlaStatus> LIVE_SLA_STATUSES = Set.of(
-            SlaStatus.PENDING, SlaStatus.OVERDUE);
+    private static boolean isLiveSlaStatus(SlaStatus slaStatus) {
+        return slaStatus == null || slaStatus == SlaStatus.OVERDUE;
+    }
 
     private final StepInstanceRepository stepInstanceRepository;
     private final ParsedProtocolCache parsedProtocolCache;
     private final DeviationService deviationService;
-    private final AuditService auditService;
     private final IntelligenceActionEvaluator intelligenceActionEvaluator;
     private final StateTransitionHistoryService stateTransitionHistoryService;
     private final StepSlaScheduleService slaScheduleService;
@@ -54,7 +55,6 @@ public class StepInstanceService {
     public StepInstanceService(StepInstanceRepository stepInstanceRepository,
                                ParsedProtocolCache parsedProtocolCache,
                                DeviationService deviationService,
-                               AuditService auditService,
                                IntelligenceActionEvaluator intelligenceActionEvaluator,
                                StateTransitionHistoryService stateTransitionHistoryService,
                                StepSlaScheduleService slaScheduleService,
@@ -62,7 +62,6 @@ public class StepInstanceService {
         this.stepInstanceRepository = stepInstanceRepository;
         this.parsedProtocolCache = parsedProtocolCache;
         this.deviationService = deviationService;
-        this.auditService = auditService;
         this.intelligenceActionEvaluator = intelligenceActionEvaluator;
         this.stateTransitionHistoryService = stateTransitionHistoryService;
         this.slaScheduleService = slaScheduleService;
@@ -70,8 +69,9 @@ public class StepInstanceService {
     }
 
     /**
-     * Create a new step instance: its event is {@link StepStatus#NOT_STARTED} and its SLA is
-     * {@link SlaStatus#PENDING}.
+     * Create a new step instance: its event is {@link StepStatus#NOT_STARTED} and its {@code sla_status}
+     * is null — no threshold has fallen due, so there is nothing to judge yet. The Compliance Service
+     * writes that column, never this service.
      *
      * <p>The two thresholds are not stored on the step. They are written as
      * {@code step_sla_state_transition} rows in this same transaction, so the step and its SLA schedule
@@ -85,7 +85,8 @@ public class StepInstanceService {
                 .actionId(actionId)
                 .repeatIndex(repeatIndex)
                 .stepStatus(StepStatus.NOT_STARTED)
-                .slaStatus(SlaStatus.PENDING)
+                // sla_status stays null: no threshold has fallen due, so there is nothing to judge
+                // yet. The Compliance Service is the only writer of that column.
                 .requiredBehavior(requiredBehavior)
                 .build();
 
@@ -93,7 +94,7 @@ public class StepInstanceService {
 
         slaScheduleService.schedule(step, dueDate, missedDate);
 
-        // Capture the initial NOT_STARTED/PENDING status in append-only history.
+        // Capture the initial NOT_STARTED status in append-only history.
         stateTransitionHistoryService.recordStepInstanceTransition(step, step.getCreatedAt());
 
         log.info("Created step instance: actionId={}, repeatIndex={}, instanceId={}, stepId={}, due={}, missed={}",
@@ -126,15 +127,17 @@ public class StepInstanceService {
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         OffsetDateTime completedAt = (occurredAt != null && !occurredAt.isAfter(now)) ? occurredAt : now;
 
-        // Read once: needed to settle this step's SLA, and again below to anchor an after-start
-        // dependent to when this step became active.
+        // Read once, to anchor an after-start dependent to when this step became active. Not used to
+        // settle this step's own SLA: that is the Compliance Service's judgement, made when the
+        // threshold falls due, by comparing the completed_at recorded here against it.
         SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.thresholds(step.getId());
 
-        SlaStatus slaStatus = determineSlaStatusOnCompletion(thresholds, completedAt);
+        // sla_status is deliberately left alone. Recording that the work happened and judging whether
+        // it was timely are different questions with different owners; writing both here is what used
+        // to require a rule about which service may overwrite the other.
         step.setStepStatus(StepStatus.COMPLETED);
-        step.setSlaStatus(slaStatus);
         step.setCompletedAt(completedAt);
-        step.setCompletedByEventId(matchedEventId);
+        step.setMatchedEventId(matchedEventId);
         step.setCompletedBySource(completedBySource);
 
         stepInstanceRepository.save(step);
@@ -142,16 +145,11 @@ public class StepInstanceService {
         // Capture the COMPLETED transition in append-only history.
         stateTransitionHistoryService.recordStepInstanceTransition(step, now);
 
-        auditService.audit("MATCHER", "STEP_COMPLETED", "system",
-                "StepInstance", step.getId().toString(),
-                Map.of("actionId", step.getActionId(),
-                        "slaStatus", step.getSlaStatus().name(),
-                        "protocolInstanceId", step.getProtocolInstance().getId().toString()));
 
-        log.info("Completed step: stepId={}, actionId={}, slaStatus={}",
-                step.getId(), step.getActionId(), step.getSlaStatus());
+        log.info("Completed step: stepId={}, actionId={}, completedAt={} (SLA judged by Compliance)",
+                step.getId(), step.getActionId(), completedAt);
 
-        // The flattened steps and the normalized relatedAction graph — all four passes below
+        // The flattened steps and the normalized relatedAction graph — all three passes below
         // traverse them.
         ProtocolDefinition protocolDef = step.getProtocolInstance().getProtocolDefinition();
         ParsedProtocolCache.ParsedProtocol protocol =
@@ -160,7 +158,7 @@ public class StepInstanceService {
         List<PlanDefinitionParser.StepMetadata> steps = protocol.steps();
         PlanDefinitionParser.DependencyGraph graph = protocol.dependencyGraph();
 
-        // This instance's step rows, read once and threaded through all four passes.
+        // This instance's step rows, read once and threaded through all three passes.
         //
         // Mutable by design: each pass that creates a row appends it here, so a later pass sees work
         // created earlier in this same transaction. createDependentSteps relies on that for diamond
@@ -172,7 +170,6 @@ public class StepInstanceService {
 
         detectOrderViolations(step, steps, graph, siblings);
         createDependentSteps(step, graph, siblings, thresholds);
-        autoSkipPrecedingOptionalSteps(step, graph, siblings);
         backfillMissingMandatorySteps(step, steps, graph, siblings);
     }
 
@@ -196,9 +193,8 @@ public class StepInstanceService {
      * still move. Excludes SLAs already settled — MISSED (written off) and MET (an optional step
      * closed out).
      */
-    private boolean isOutstanding(StepInstance step) {
-        return step.getStepStatus() == StepStatus.NOT_STARTED
-                && LIVE_SLA_STATUSES.contains(step.getSlaStatus());
+    private boolean isOutstandingStep(StepInstance step) {
+        return step.getStepStatus() == StepStatus.NOT_STARTED && isLiveSlaStatus(step.getSlaStatus());
     }
 
     /**
@@ -231,7 +227,7 @@ public class StepInstanceService {
         for (String predecessorId : mustPredecessorIds) {
             boolean hasIncomplete = siblings.stream()
                     .filter(s -> predecessorId.equals(s.getActionId()))
-                    .anyMatch(this::isOutstanding);
+                    .anyMatch(this::isOutstandingStep);
             if (hasIncomplete) {
                 incompletePrerequisites.add(predecessorId);
             }
@@ -388,7 +384,7 @@ public class StepInstanceService {
             }
             boolean inFlight = siblings.stream()
                     .filter(s -> prerequisiteId.equals(s.getActionId()))
-                    .anyMatch(this::isOutstanding);
+                    .anyMatch(this::isOutstandingStep);
             if (inFlight) {
                 return prerequisiteId;
             }
@@ -396,47 +392,6 @@ public class StepInstanceService {
         return null;
     }
 
-    /**
-     * Auto-skip preceding optional steps when a subsequent step completes.
-     * Only skips steps that are direct ancestors (predecessors in the dependency graph)
-     * of the completed step AND have requiredBehavior=could AND are still actionable.
-     *
-     * A predecessor of step X is any step X is meant to happen after, computed transitively
-     * to cover the full ancestor chain.
-     */
-    private void autoSkipPrecedingOptionalSteps(StepInstance completedStep,
-                                                PlanDefinitionParser.DependencyGraph graph,
-                                                List<StepInstance> siblings) {
-        // Compute all ancestor step ids of the completed step (transitive predecessors)
-        Set<String> ancestorStepIds = PlanDefinitionParser.computeAncestors(
-                completedStep.getActionId(), graph);
-
-        if (ancestorStepIds.isEmpty()) {
-            return;
-        }
-
-        for (StepInstance sibling : siblings) {
-            // completedStep is always persisted, so its id is the safe receiver here — siblings may
-            // include a row progressive instantiation just created in this transaction.
-            if (completedStep.getId().equals(sibling.getId())) continue;
-            if (!"could".equals(sibling.getRequiredBehavior())) continue;
-            if (!isOutstanding(sibling)) continue;
-            if (!ancestorStepIds.contains(sibling.getActionId())) continue;
-
-            // Closed out, not completed: no event arrived, so stepStatus stays NOT_STARTED while the
-            // SLA settles as MET — the journey moved past it without a breach.
-            sibling.setSlaStatus(SlaStatus.MET);
-            stepInstanceRepository.save(sibling);
-
-            // Capture the auto-skip transition in append-only history.
-            stateTransitionHistoryService.recordStepInstanceTransition(sibling, OffsetDateTime.now(ZoneOffset.UTC));
-
-            log.info("Auto-closed predecessor optional step {} (actionId={}) with SLA met " +
-                            "due to completion of step {} (actionId={})",
-                    sibling.getId(), sibling.getActionId(),
-                    completedStep.getId(), completedStep.getActionId());
-        }
-    }
 
     /**
      * Materialize the mandatory steps the journey should already have recorded. Progressive
@@ -552,17 +507,4 @@ public class StepInstanceService {
      * clinical occurrence time that may precede the scheduler's last sweep: an act that happened
      * before the due date but was reported after it is MET, not OVERDUE.
      */
-    private SlaStatus determineSlaStatusOnCompletion(SlaThresholdReader.SlaThresholds thresholds,
-                                                     OffsetDateTime completedAt) {
-        // No due date means no deadline to breach.
-        if (thresholds.dueDate() == null || completedAt.isBefore(thresholds.dueDate())) {
-            return SlaStatus.MET;
-        }
-
-        if (thresholds.missedDate() != null && !completedAt.isBefore(thresholds.missedDate())) {
-            return SlaStatus.MISSED;
-        }
-
-        return SlaStatus.OVERDUE;
-    }
 }

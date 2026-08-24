@@ -1,7 +1,6 @@
 package org.openphc.cce.matcher.service;
 
 import org.openphc.cce.common.service.SlaThresholdReader;
-import org.openphc.cce.common.service.AuditService;
 import org.openphc.cce.common.service.DeviationService;
 import org.openphc.cce.common.service.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.openphc.cce.common.entity.Deviation;
+import org.openphc.cce.common.service.StateTransitionHistoryService;
 import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.StepInstance;
@@ -52,8 +52,6 @@ class StepInstanceServiceTest {
     @Mock
     private DeviationService deviationService;
 
-    @Mock
-    private AuditService auditService;
 
     @Mock
     private IntelligenceActionEvaluator intelligenceActionEvaluator;
@@ -76,7 +74,7 @@ class StepInstanceServiceTest {
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
         service = new StepInstanceService(stepInstanceRepository,
-                parsedProtocolCache, deviationService, auditService,
+                parsedProtocolCache, deviationService,
                 intelligenceActionEvaluator, stateTransitionHistoryService, slaScheduleService,
                 slaThresholdReader);
 
@@ -120,7 +118,7 @@ class StepInstanceServiceTest {
             assertEquals("bp-check", result.getActionId());
             assertEquals(0, result.getRepeatIndex());
             assertEquals(StepStatus.NOT_STARTED, result.getStepStatus());
-            assertEquals(SlaStatus.PENDING, result.getSlaStatus());
+            assertNull(result.getSlaStatus(), "sla_status is null until a threshold falls due");
             // The thresholds are scheduled as step_sla_state_transition rows, not stored on the step.
             verify(slaScheduleService).schedule(result, dueDate, missedDate);
             // The initial NOT_STARTED/PENDING status is recorded in append-only history.
@@ -132,9 +130,9 @@ class StepInstanceServiceTest {
     class CompleteStep {
 
         @Test
-        void completedBeforeDueDate_slaMet() {
+        void completion_recordsTheEventButLeavesTheSlaUnjudged() {
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
-            StepInstance step = buildStep(StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+            StepInstance step = buildStep(StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
 
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
@@ -143,14 +141,15 @@ class StepInstanceServiceTest {
             service.completeStep(step, eventId, "test-source", null);
 
             assertEquals(StepStatus.COMPLETED, step.getStepStatus());
-            assertEquals(SlaStatus.MET, step.getSlaStatus());
+            // Matcher records that the work happened and when; whether that was timely is the
+            // Compliance Service's judgement, made when the due date falls and compared against
+            // the completed_at recorded here. Writing MET here would be a second writer on the column.
+            assertNull(step.getSlaStatus(), "sla_status is Compliance's to write, not Matcher's");
             assertNotNull(step.getCompletedAt());
-            assertEquals(eventId, step.getCompletedByEventId());
+            assertEquals(eventId, step.getMatchedEventId());
             assertEquals("test-source", step.getCompletedBySource());
 
-            verify(auditService).audit(eq("MATCHER"), eq("STEP_COMPLETED"),
-                    eq("system"), eq("StepInstance"), anyString(), anyMap());
-            // The COMPLETED transition (both statuses) is recorded in append-only history.
+            // The COMPLETED transition is recorded in append-only history.
             verify(stateTransitionHistoryService).recordStepInstanceTransition(eq(step), any(OffsetDateTime.class));
         }
 
@@ -238,7 +237,7 @@ class StepInstanceServiceTest {
             ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
             StepInstance step = buildStepWithProtocol(protocolInstance, "initial-enrollment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+                    StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
 
             when(stepInstanceRepository.save(any(StepInstance.class))).thenAnswer(invocation -> {
                 StepInstance s = invocation.getArgument(0);
@@ -273,7 +272,7 @@ class StepInstanceServiceTest {
 
             assertNotNull(dependentStep, "Dependent step bp-check should be created");
             assertEquals(StepStatus.NOT_STARTED, dependentStep.getStepStatus());
-            assertEquals(SlaStatus.PENDING, dependentStep.getSlaStatus());
+            assertNull(dependentStep.getSlaStatus(), "sla_status is null until a threshold falls due");
             SlaThresholdReader.SlaThresholds scheduled = scheduledFor("bp-check");
             assertNotNull(scheduled.dueDate());
             assertNotNull(scheduled.missedDate());
@@ -286,7 +285,7 @@ class StepInstanceServiceTest {
             ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
             StepInstance step = buildStepWithProtocol(protocolInstance, "initial-enrollment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+                    StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
 
             when(stepInstanceRepository.save(any(StepInstance.class))).thenAnswer(invocation -> {
                 StepInstance s = invocation.getArgument(0);
@@ -327,7 +326,7 @@ class StepInstanceServiceTest {
             ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
             StepInstance step = buildStepWithProtocol(protocolInstance, "initial-enrollment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+                    StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
 
             when(stepInstanceRepository.save(any(StepInstance.class))).thenAnswer(invocation -> {
                 StepInstance s = invocation.getArgument(0);
@@ -389,7 +388,7 @@ class StepInstanceServiceTest {
             ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
             StepInstance step = buildStepWithProtocol(protocolInstance, "initial-enrollment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+                    StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
 
             when(stepInstanceRepository.save(any(StepInstance.class))).thenAnswer(invocation -> {
                 StepInstance s = invocation.getArgument(0);
@@ -447,7 +446,7 @@ class StepInstanceServiceTest {
                                                             SlaStatus labsSlaStatus) {
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
             StepInstance intake = buildStepWithProtocol(protocolInstance, "intake",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+                    StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
             StepInstance labs = StepInstance.builder()
                     .id(UUID.randomUUID())
                     .protocolInstance(protocolInstance)
@@ -483,7 +482,7 @@ class StepInstanceServiceTest {
             ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
             StepInstance step = buildStepWithProtocol(protocolInstance, "visit-encounter",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+                    StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
 
             when(stepInstanceRepository.save(any(StepInstance.class))).thenAnswer(invocation -> {
                 StepInstance s = invocation.getArgument(0);
@@ -512,7 +511,7 @@ class StepInstanceServiceTest {
 
             assertNotNull(dependent, "a 'before' edge on the predecessor must still create the dependent");
             assertEquals(StepStatus.NOT_STARTED, dependent.getStepStatus());
-            assertEquals(SlaStatus.PENDING, dependent.getSlaStatus());
+            assertNull(dependent.getSlaStatus(), "sla_status is null until a threshold falls due");
             // before-* normalizes to after-end: anchored to the predecessor's completion + 2d
             assertEquals(step.getCompletedAt().plusDays(2).toLocalDate(),
                     scheduledFor(dependent.getActionId()).dueDate().toLocalDate());
@@ -602,7 +601,7 @@ class StepInstanceServiceTest {
             ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
             OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
             StepInstance step = buildStepWithProtocol(protocolInstance, "initial-enrollment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, dueDate, dueDate.plusDays(3));
+                    StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
 
             lenient().when(stepInstanceRepository.save(any(StepInstance.class))).thenAnswer(invocation -> {
                 StepInstance s = invocation.getArgument(0);
@@ -626,177 +625,6 @@ class StepInstanceServiceTest {
     }
 
     @Nested
-    class AutoSkipOptionalSteps {
-
-        @Test
-        void completingStep_autoSkipsAncestorCouldSteps() {
-            ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
-
-            StepInstance optionalStep = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("optional-lab")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.OVERDUE)
-                    .requiredBehavior("could")
-                    .build();
-
-            StepInstance completedStep = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("mandatory-visit")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
-                    .requiredBehavior("must")                    .build();
-            stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
-
-            when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-            when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
-                    .thenReturn(List.of(optionalStep, completedStep));
-
-            // Build dependency graph: mandatory-visit comes after optional-lab, so optional-lab
-            // is the ancestor
-            PlanDefinitionParser.StepMetadata optionalLabAction = new PlanDefinitionParser.StepMetadata(
-                    "optional-lab", "Optional Lab", null, List.of(), null, null, "could", List.of());
-            PlanDefinitionParser.StepMetadata mandatoryVisitAction = new PlanDefinitionParser.StepMetadata(
-                    "mandatory-visit", "Mandatory Visit", null,
-                    List.of(new PlanDefinitionParser.RelatedStepInfo("optional-lab", "after-end", BigDecimal.ZERO, "d")),
-                    null, null, "must", List.of());
-            stubProtocol(List.of(optionalLabAction, mandatoryVisitAction));
-
-            service.completeStep(completedStep, UUID.randomUUID(), "test-src", null);
-
-            assertEquals(SlaStatus.MET, optionalStep.getSlaStatus());
-            // The auto-skip transition of the ancestor optional step is recorded in append-only history.
-            verify(stateTransitionHistoryService).recordStepInstanceTransition(eq(optionalStep), any(OffsetDateTime.class));
-        }
-
-        @Test
-        void completingStep_doesNotSkipParallelCouldSiblings() {
-            ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
-
-            // Parallel sibling: pregnancy-profile (created by same parent, not an ancestor of family-planning)
-            StepInstance parallelSibling = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("pregnancy-profile")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
-                    .requiredBehavior("could")
-                    .build();
-
-            StepInstance completedStep = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("family-planning")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
-                    .requiredBehavior("could")                    .build();
-            stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
-
-            when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-            when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
-                    .thenReturn(List.of(parallelSibling, completedStep));
-
-            // Graph: family-planning and pregnancy-profile both come after registration
-            // (parallel branches)
-            PlanDefinitionParser.StepMetadata registrationAction = new PlanDefinitionParser.StepMetadata(
-                    "registration", "Registration", null, List.of(), null, null, "must", List.of());
-            PlanDefinitionParser.StepMetadata familyPlanningAction = new PlanDefinitionParser.StepMetadata(
-                    "family-planning", "Family Planning", null,
-                    List.of(new PlanDefinitionParser.RelatedStepInfo("registration", "after-end", BigDecimal.ZERO, "d")),
-                    null, null, "could", List.of());
-            PlanDefinitionParser.StepMetadata pregnancyProfileAction = new PlanDefinitionParser.StepMetadata(
-                    "pregnancy-profile", "Pregnancy Profile", null,
-                    List.of(new PlanDefinitionParser.RelatedStepInfo("registration", "after-end", BigDecimal.ZERO, "d")),
-                    null, null, "could", List.of());
-            stubProtocol(List.of(registrationAction, familyPlanningAction, pregnancyProfileAction));
-
-            service.completeStep(completedStep, UUID.randomUUID(), "test-src", null);
-
-            // pregnancy-profile should NOT be skipped — it's a parallel sibling, not an ancestor
-            assertEquals(StepStatus.NOT_STARTED, parallelSibling.getStepStatus());
-            assertEquals(SlaStatus.PENDING, parallelSibling.getSlaStatus());
-        }
-
-        @Test
-        void completingStep_doesNotSkipMustSteps() {
-            ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
-
-            StepInstance mustStep = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("mandatory-lab")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.OVERDUE)
-                    .requiredBehavior("must")
-                    .build();
-
-            StepInstance completedStep = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("visit")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
-                    .requiredBehavior("must")                    .build();
-            stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
-
-            when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-            lenient().when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
-                    .thenReturn(List.of(mustStep, completedStep));
-
-            stubProtocol(List.of());
-
-            service.completeStep(completedStep, UUID.randomUUID(), "test-src", null);
-
-            assertEquals(StepStatus.NOT_STARTED, mustStep.getStepStatus());
-            assertEquals(SlaStatus.OVERDUE, mustStep.getSlaStatus());
-        }
-
-        @Test
-        void completingStep_doesNotSkipAlreadyTerminalCouldSteps() {
-            ProtocolInstance protocolInstance = buildProtocolInstanceWithDefinition();
-
-            StepInstance completedOptional = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("optional-lab")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.COMPLETED)
-                    .slaStatus(SlaStatus.MET)
-                    .requiredBehavior("could")
-                    .build();
-
-            StepInstance completedStep = StepInstance.builder()
-                    .id(UUID.randomUUID())
-                    .protocolInstance(protocolInstance)
-                    .actionId("visit")
-                    .repeatIndex(0)
-                    .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
-                    .requiredBehavior("must")                    .build();
-            stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
-
-            when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
-            lenient().when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
-                    .thenReturn(List.of(completedOptional, completedStep));
-
-            stubProtocol(List.of());
-
-            service.completeStep(completedStep, UUID.randomUUID(), "test-src", null);
-
-            assertEquals(StepStatus.COMPLETED, completedOptional.getStepStatus());
-            assertEquals(SlaStatus.MET, completedOptional.getSlaStatus());
-        }
-    }
-
-    @Nested
     class OrderViolationDetection {
 
         @Test
@@ -810,7 +638,6 @@ class StepInstanceServiceTest {
                     .actionId("vitals-recording")
                     .repeatIndex(0)
                     .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
                     .requiredBehavior("must")                    .build();
             stubThresholds(predecessorStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(1), null);
 
@@ -821,7 +648,6 @@ class StepInstanceServiceTest {
                     .actionId("chief-complaints")
                     .repeatIndex(0)
                     .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
                     .requiredBehavior("must")                    .build();
             stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
 
@@ -878,7 +704,6 @@ class StepInstanceServiceTest {
                     .actionId("chief-complaints")
                     .repeatIndex(0)
                     .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
                     .requiredBehavior("must")                    .build();
             stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
 
@@ -914,7 +739,6 @@ class StepInstanceServiceTest {
                     .actionId("history-assessment")
                     .repeatIndex(0)
                     .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
                     .requiredBehavior("could")
                     .build();
 
@@ -924,7 +748,6 @@ class StepInstanceServiceTest {
                     .actionId("lab-order")
                     .repeatIndex(0)
                     .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
                     .requiredBehavior("must")                    .build();
             stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
 
@@ -961,7 +784,6 @@ class StepInstanceServiceTest {
                     .actionId("visit-encounter")
                     .repeatIndex(0)
                     .stepStatus(StepStatus.NOT_STARTED)
-                    .slaStatus(SlaStatus.PENDING)
                     .requiredBehavior("must")                    .build();
             stubThresholds(completedStep, OffsetDateTime.now(ZoneOffset.UTC).plusDays(7), null);
 
@@ -1048,7 +870,7 @@ class StepInstanceServiceTest {
             // Only `treatment` was ever recorded — its predecessors have no step_instance row,
             // so the journey view shows them as "not started" and the scheduler cannot see them.
             StepInstance treatment = buildStepWithProtocol(protocolInstance, "treatment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, occurredAt.minusHours(2), occurredAt.plusDays(1));
+                    StepStatus.NOT_STARTED, null, occurredAt.minusHours(2), occurredAt.plusDays(1));
 
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
@@ -1064,7 +886,7 @@ class StepInstanceServiceTest {
             assertEquals(Set.of("vitals-recording", "consultation", "diagnosis"), backfilled.keySet());
             backfilled.values().forEach(step -> {
                 assertEquals(StepStatus.NOT_STARTED, step.getStepStatus());
-                assertEquals(SlaStatus.PENDING, step.getSlaStatus());
+                assertNull(step.getSlaStatus(), "sla_status is null until a threshold falls due");
                 assertEquals("must", step.getRequiredBehavior());
                 assertEquals(0, step.getRepeatIndex());
                 // Anchored to the clinical completion time, with tolerance-derived thresholds so
@@ -1083,7 +905,7 @@ class StepInstanceServiceTest {
             StepInstance missedDiagnosis = buildStepWithProtocol(protocolInstance, "diagnosis",
                     StepStatus.NOT_STARTED, SlaStatus.MISSED, occurredAt.minusDays(5), occurredAt.minusDays(4));
             StepInstance treatment = buildStepWithProtocol(protocolInstance, "treatment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, occurredAt.minusHours(2), occurredAt.plusDays(1));
+                    StepStatus.NOT_STARTED, null, occurredAt.minusHours(2), occurredAt.plusDays(1));
 
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
@@ -1105,7 +927,7 @@ class StepInstanceServiceTest {
             StepInstance visit = buildStepWithProtocol(protocolInstance, "visit-encounter",
                     StepStatus.COMPLETED, SlaStatus.MET, occurredAt.minusHours(3), occurredAt.minusHours(2));
             StepInstance vitals = buildStepWithProtocol(protocolInstance, "vitals-recording",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, occurredAt.minusHours(1), occurredAt.plusDays(1));
+                    StepStatus.NOT_STARTED, null, occurredAt.minusHours(1), occurredAt.plusDays(1));
             vitals.setRequiredBehavior("must");
 
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
@@ -1130,7 +952,7 @@ class StepInstanceServiceTest {
             StepInstance consultation = buildStepWithProtocol(protocolInstance, "consultation",
                     StepStatus.COMPLETED, SlaStatus.MET, occurredAt.minusHours(2), occurredAt.minusHours(1));
             StepInstance chiefComplaints = buildStepWithProtocol(protocolInstance, "chief-complaints",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, occurredAt.minusHours(1), occurredAt.plusDays(1));
+                    StepStatus.NOT_STARTED, null, occurredAt.minusHours(1), occurredAt.plusDays(1));
 
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
@@ -1161,7 +983,7 @@ class StepInstanceServiceTest {
                     StepStatus.COMPLETED, SlaStatus.MET, occurredAt.minusHours(1), occurredAt);
             // `treatment` arrives on its own trigger, skipping over `diagnosis`
             StepInstance treatment = buildStepWithProtocol(protocolInstance, "treatment",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, occurredAt.minusMinutes(30), occurredAt.plusDays(1));
+                    StepStatus.NOT_STARTED, null, occurredAt.minusMinutes(30), occurredAt.plusDays(1));
 
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
@@ -1181,7 +1003,7 @@ class StepInstanceServiceTest {
             OffsetDateTime occurredAt = OffsetDateTime.now(ZoneOffset.UTC);
 
             StepInstance consultation = buildStepWithProtocol(protocolInstance, "consultation",
-                    StepStatus.NOT_STARTED, SlaStatus.PENDING, occurredAt.minusHours(1), occurredAt.plusDays(1));
+                    StepStatus.NOT_STARTED, null, occurredAt.minusHours(1), occurredAt.plusDays(1));
 
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             when(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()))
@@ -1195,10 +1017,10 @@ class StepInstanceServiceTest {
             StepInstance backfilled = capturedStepsExcept("consultation").get("vitals-recording");
             assertNotNull(backfilled);
             assertEquals(StepStatus.NOT_STARTED, backfilled.getStepStatus());
-            assertEquals(SlaStatus.PENDING, backfilled.getSlaStatus());
+            assertNull(backfilled.getSlaStatus(), "sla_status is null until a threshold falls due");
             SlaThresholdReader.SlaThresholds scheduled = scheduledFor("vitals-recording");
             assertEquals(consultation.getCompletedAt(), scheduled.dueDate());
-            // No tolerance-days extension: there is no OVERDUE_TO_MISSED row to schedule.
+            // No tolerance-days extension: there is no MISSED_DATE_REACHED row to schedule.
             assertNull(scheduled.missedDate());
         }
     }
@@ -1209,7 +1031,6 @@ class StepInstanceServiceTest {
         return ProtocolInstance.builder()
                 .id(UUID.randomUUID())
                 .patientId("patient-1")
-                .protocolCanonical("http://openphc.org/PlanDefinition/anc-high-risk|1.0.0")
                 .status(ProtocolInstanceStatus.ACTIVE)
                 .build();
     }
@@ -1226,7 +1047,6 @@ class StepInstanceServiceTest {
                 .id(UUID.randomUUID())
                 .patientId("patient-1")
                 .protocolDefinition(protocolDef)
-                .protocolCanonical("http://openphc.org/PlanDefinition/anc-high-risk|1.0.0")
                 .status(ProtocolInstanceStatus.ACTIVE)
                 .build();
     }
