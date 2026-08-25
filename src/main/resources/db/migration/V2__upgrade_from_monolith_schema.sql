@@ -459,12 +459,11 @@ BEGIN
     END IF;
 END $$;
 
--- Any 1.x index on the column carries the pre-rename name and no WHERE clause; V1's is partial, so the
--- old shape is dropped rather than renamed.
+-- The column carries no index in 2.0.0 (V1 §3), so every name it has ever had is dropped: the two 1.x
+-- ones, and the one an earlier build of this release created.
 DROP INDEX IF EXISTS idx_step_instance_completed_by_event_id;
 DROP INDEX IF EXISTS idx_step_instance_completed_event;
-CREATE INDEX IF NOT EXISTS idx_step_instance_matched_event
-    ON step_instance (matched_event_id) WHERE matched_event_id IS NOT NULL;
+DROP INDEX IF EXISTS idx_step_instance_matched_event;
 
 -- The Compliance Service claims a completed step's transitions from this index rather than waiting for
 -- their deadlines (V1 §3). 1.x had no equivalent — it had no such claim path — so it is created here.

@@ -125,6 +125,10 @@ CREATE TABLE step_instance (
     CONSTRAINT step_instance_pkey PRIMARY KEY (id),
     CONSTRAINT step_instance_protocol_instance_id_fkey
         FOREIGN KEY (protocol_instance_id) REFERENCES protocol_instance(id),
+    -- Unindexed on purpose: nothing looks a step up by the event that completed it. PostgreSQL does not
+    -- index a referencing column for you, and does not need one here — the cost of not having it is a
+    -- scan of step_instance per deleted matcher_event_log row, and nothing deletes from that log. Add
+    -- one alongside any retention that starts to.
     CONSTRAINT step_instance_matched_event_id_fkey
         FOREIGN KEY (matched_event_id) REFERENCES matcher_event_log(id),
     CONSTRAINT step_instance_step_status_check
@@ -139,8 +143,6 @@ CREATE INDEX idx_step_instance_protocol ON step_instance (protocol_instance_id);
 -- Locating the step a late-arriving event should complete.
 CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_id, action_id)
     WHERE step_status = 'NOT_STARTED';
-CREATE INDEX idx_step_instance_matched_event ON step_instance (matched_event_id)
-    WHERE matched_event_id IS NOT NULL;
 -- The Compliance Service's second claim path: a step that has been completed can have its SLA settled
 -- from completed_at at once, without waiting for a threshold to fall due. This is the set it selects —
 -- completed but not yet settled — which stays small because a claim empties it. Keeping it a partial
