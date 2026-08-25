@@ -12,7 +12,7 @@ graph TB
     subgraph Dependent Services
         INTEL["CCE Intelligence Service"]
         EHR["CCE Collector Service"]
-        SCHEDULER["CCE Compliance Service"]
+        COMPLIANCE["CCE Compliance Service"]
         MGMT["CCE Protocol Service"]
     end
 
@@ -40,7 +40,7 @@ graph TB
     ENGINE --> KAFKA_P
     KAFKA_P -->|"cce.intelligence.triggers"| INTEL
     MGMT -->|"writes protocol_definition,<br/>trigger_index, action_definition"| DB
-    SCHEDULER -->|"claims step_sla_state_transition<br/>writes sla_status + deviation"| DB
+    COMPLIANCE -->|"claims step_sla_state_transition<br/>writes sla_status + deviation"| DB
     DB -.->|"reads (per event)<br/>+ polled reconciliation"| REFRESH
     REFRESH --> ENGINE
 
@@ -50,7 +50,7 @@ graph TB
     classDef broker fill:#E67E22,stroke:#D35400,color:white
 
     class ENGINE,KAFKA_C,KAFKA_P,FHIR,EXPR,REFRESH,ACTUATOR service
-    class EHR,SCHEDULER,INTEL,MGMT external
+    class EHR,COMPLIANCE,INTEL,MGMT external
     class DB data
     class KAFKA broker
 ```
@@ -72,16 +72,18 @@ Everything after that — deciding which rows are due, applying the status chang
 deviation — happens in the Compliance Service. There is **no Kafka hop and no HTTP call** between the
 two: they meet on one table in the shared database, with one writer per column.
 
-**The invariant that matters here:** Matcher owns everything driven by an inbound event, the Compliance
-Service owns everything driven by time passing, and the two never write the same column. Concretely,
-Matcher writes `step_status` and settles `sla_status` once at completion; it never touches a
-transition row after inserting it.
+**The invariant that matters here:** Matcher owns what an inbound event establishes — that the work
+happened, and when — and the Compliance Service owns every judgement of timeliness made from it. The two
+never write the same column. Concretely, Matcher writes `step_status` and `completed_at` and never
+`sla_status`; it inserts the transition rows and never touches one again. Compliance reads that
+`completed_at` and settles the SLA from it, either when a threshold falls due or on its next sweep after
+a completion.
 
 `ORDER_VIOLATION` deviations stay in this service, because they are detected from the event itself at
 completion rather than from a deadline passing.
 
-The full contract — the claim protocol, what the applier does when an event arrived before its
-deadline, retry and backoff — is documented once, on the side that implements it:
+The full contract — the two reasons a row is claimable, what the applier does when an event arrived
+before its deadline, retry and backoff — is documented once, on the side that implements it:
 
 - `cce-common-util` → [Architecture Overview §5](../../cce-common-util/docs/architecture-overview.md#5-sla-transition-contract) — the contract
 - `cce-compliance-service` → [Architecture §3–4](../../cce-compliance-service/docs/architecture-overview.md#3-the-claim-protocol) — the implementation

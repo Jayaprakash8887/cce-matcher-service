@@ -88,8 +88,8 @@ Startup + every 60s: ProtocolDefinitionService.refreshProtocolCaches()
 `step_instance.sla_status` belongs entirely to the **CCE Compliance Service**, which claims the
 `step_sla_state_transition` rows this service writes. This service records *that* a step completed and
 *when* (`completed_at`, from the clinical occurrence time) and never judges whether that was timely —
-so a freshly completed step's `sla_status` is null until its due date falls and Compliance compares the
-two. One writer, one source of evidence.
+so a freshly completed step's `sla_status` is null until Compliance's next sweep, which compares the
+`completed_at` recorded here against the step's thresholds. One writer, one source of evidence.
 
 ## Testing
 

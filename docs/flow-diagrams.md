@@ -198,9 +198,10 @@ per-process, so no leasing is needed.
 ## 3. Time-Driven SLA Transitions (owned elsewhere)
 
 Matcher schedules these but does not apply them. When it creates a step it writes one
-`step_sla_state_transition` row per threshold; the CCE Compliance Service claims due rows, applies the
-`sla_status` change, and records the `OVERDUE` / `MISSED` deviation. There is no Kafka hop — the two
-services meet on the table, with one writer per column. See
+`step_sla_state_transition` row per threshold; the CCE Compliance Service claims a row once its deadline
+has passed — or as soon as the step completes, since `completed_at` then decides the outcome on its own —
+applies the `sla_status` change, and records the `OVERDUE` / `MISSED` deviation. There is no Kafka hop —
+the two services meet on the table, with one writer per column. See
 [Architecture Overview §1.1](architecture-overview.md#11-sla-transition-evaluation-contract).
 
 ```mermaid

@@ -128,8 +128,8 @@ public class StepInstanceService {
         OffsetDateTime completedAt = (occurredAt != null && !occurredAt.isAfter(now)) ? occurredAt : now;
 
         // Read once, to anchor an after-start dependent to when this step became active. Not used to
-        // settle this step's own SLA: that is the Compliance Service's judgement, made when the
-        // threshold falls due, by comparing the completed_at recorded here against it.
+        // settle this step's own SLA: that is the Compliance Service's judgement, made on its next
+        // sweep, by comparing the completed_at recorded below against each threshold.
         SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.thresholds(step.getId());
 
         // sla_status is deliberately left alone. Recording that the work happened and judging whether

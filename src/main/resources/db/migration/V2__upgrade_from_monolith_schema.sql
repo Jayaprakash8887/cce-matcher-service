@@ -453,6 +453,14 @@ DROP INDEX IF EXISTS idx_step_instance_completed_event;
 CREATE INDEX IF NOT EXISTS idx_step_instance_matched_event
     ON step_instance (matched_event_id) WHERE matched_event_id IS NOT NULL;
 
+-- The Compliance Service claims a completed step's transitions from this index rather than waiting for
+-- their deadlines (V1 §3). 1.x had no equivalent — it had no such claim path — so it is created here.
+CREATE INDEX IF NOT EXISTS idx_step_instance_completed_unjudged
+    ON step_instance (id)
+    WHERE step_status = 'COMPLETED'
+      AND completed_at IS NOT NULL
+      AND (sla_status IS NULL OR sla_status = 'OVERDUE');
+
 -- ── 9. audit_log ─────────────────────────────────────────────────────────────
 -- Dropped in 2.0.0. The append-only history tables carry state transitions, and actor attribution is
 -- planned to move onto the domain tables themselves rather than a parallel log. Kept as a separate

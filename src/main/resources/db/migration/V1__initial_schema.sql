@@ -87,16 +87,17 @@ ALTER TABLE matcher_event_log REPLICA IDENTITY FULL;
 -- step_status uses the FHIR R4 CarePlanActivityStatus codes (not-started / completed); a
 -- step_instance is an occurrence of a PlanDefinition action, i.e. a care-plan activity.
 --
--- sla_status is NULL until a threshold falls due: null is not a status but the absence of a
+-- sla_status is NULL until there is something to judge: null is not a status but the absence of a
 -- judgement, and it is also the resting state of a step that has no SLA at all (no due date means
 -- no step_sla_state_transition rows, so nothing will ever judge it).
 --
--- The Compliance Service is its ONLY writer. At the due date a step completed before it becomes MET
--- and one not completed becomes OVERDUE; at the missed date (= due date + tolerance-days) a still
--- unrecorded 'must' step becomes MISSED. Matcher records that the work happened and when, never
--- whether it was timely — so the two services never write this column's value from different
--- evidence. Because the two statuses are independent, a step can be COMPLETED + MISSED (recorded
--- after being written off).
+-- The Compliance Service is its ONLY writer, and it judges from completed_at against the thresholds:
+-- completed before the due date is MET, at or after it OVERDUE, at or after the missed date (= due
+-- date + tolerance-days) MISSED for a 'must' step. A completed step is settled on the next sweep,
+-- since completed_at fixes the answer; one still outstanding is judged when each threshold falls due.
+-- Matcher records that the work happened and when, never whether it was timely — so the two services
+-- never write this column's value from different evidence. Because the two statuses are independent,
+-- a step can be COMPLETED + MISSED (recorded after being written off).
 --
 -- Both thresholds live on step_sla_state_transition (§4) rather than here, so the service that
 -- evaluates due work selects from a table that shrinks as work is processed instead of rescanning
@@ -141,6 +142,14 @@ CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_i
     WHERE step_status = 'NOT_STARTED';
 CREATE INDEX idx_step_instance_matched_event ON step_instance (matched_event_id)
     WHERE matched_event_id IS NOT NULL;
+-- The Compliance Service's second claim path: a step that has been completed can have its SLA settled
+-- from completed_at at once, without waiting for a threshold to fall due. This is the set it selects —
+-- completed but not yet settled — which stays small because a claim empties it. Keeping it a partial
+-- index is the point: the alternative is scanning every step's pending schedule on each sweep.
+CREATE INDEX idx_step_instance_completed_unjudged ON step_instance (id)
+    WHERE step_status = 'COMPLETED'
+      AND completed_at IS NOT NULL
+      AND (sla_status IS NULL OR sla_status = 'OVERDUE');
 
 ALTER TABLE step_instance REPLICA IDENTITY FULL;
 
@@ -170,6 +179,12 @@ ALTER TABLE step_instance REPLICA IDENTITY FULL;
 -- after process_by breached that deadline; completed before it did not. Only the due-date row can settle
 -- an SLA as MET — beating the missed date merely means the step was not written off, and a step
 -- completed between its two thresholds stays the OVERDUE the due-date row made it.
+--
+-- Because that comparison never consults the clock, a row whose step is already COMPLETED can be applied
+-- at once: completed_at is fixed and the thresholds were written at creation, so the deadline arriving
+-- would only confirm what is already decided. So a row becomes claimable when next_attempt_at passes OR
+-- when its step completes — the second path is why an early completion does not sit at a null sla_status
+-- until its due date, and it is what idx_step_instance_completed_unjudged (§3) exists to serve.
 -- =============================================
 CREATE TABLE step_sla_state_transition (
     id                  UUID            NOT NULL,
