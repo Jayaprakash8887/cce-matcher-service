@@ -3,6 +3,7 @@ plugins {
     id 'org.springframework.boot' version '3.4.2'
     id 'io.spring.dependency-management' version '1.1.7'
     id 'jacoco'
+    id 'org.sonarqube' version '6.3.1.5724'
 }
 
 group = 'org.openphc.cce'
@@ -144,4 +145,21 @@ jacocoTestCoverageVerification {
 
 tasks.named('check') {
     dependsOn tasks.named('jacocoTestCoverageVerification')
+}
+
+sonar {
+    properties {
+        property 'sonar.organization', 'openphc'
+        property 'sonar.projectKey', 'openphc_cce-matcher-service'
+        // The report jacocoTestReport already emits. Sonar reads coverage from this file rather
+        // than measuring anything itself, so the two can only agree.
+        property 'sonar.coverage.jacoco.xmlReportPaths',
+                 "${layout.buildDirectory.get()}/reports/jacoco/test/jacocoTestReport.xml"
+    }
+}
+
+// Without this, `gradlew sonar` on a clean checkout uploads with no coverage at all — the task does
+// not build the report it reads.
+tasks.named('sonar') {
+    dependsOn jacocoTestReport
 }
