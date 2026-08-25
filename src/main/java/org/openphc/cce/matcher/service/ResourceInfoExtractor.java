@@ -41,6 +41,12 @@ public class ResourceInfoExtractor {
      * Extract coded values from FHIR resource payloads for Tier 1 structural matching.
      * Handles CodeableConcept fields (object or array), and plain string fields like "status".
      *
+     * <p><strong>This list is the set of paths a {@code codeFilter.path} can usefully name.</strong>
+     * The Protocol Service indexes whatever path a PlanDefinition declares, so a filter on a path that
+     * is not read here is indexed and then never matched — and because matching requires <em>every</em>
+     * codeFilter of an action to match, one such path silently disables the whole trigger. Adding a path
+     * to a protocol therefore means adding it here too.
+     *
      * @param data the event payload (JsonNode representation of FHIR resource)
      * @return list of CodePathTriple with path, system, and code
      */
@@ -50,9 +56,11 @@ public class ResourceInfoExtractor {
             return result;
         }
 
-        // CodeableConcept fields (single object): code, class, clinicalStatus, verificationStatus
+        // CodeableConcept fields (single object): code, class, serviceType, clinicalStatus,
+        // verificationStatus
         extractCodingsFromPath(data, "code", result);
         extractCodingsFromPath(data, "class", result);
+        extractCodingsFromPath(data, "serviceType", result);
         extractCodingsFromPath(data, "clinicalStatus", result);
         extractCodingsFromPath(data, "verificationStatus", result);
 

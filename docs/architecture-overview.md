@@ -269,7 +269,13 @@ Resource metadata is extracted from the CloudEvent **payload** (`data`), never f
 | Field | Extraction Paths |
 |---|---|
 | `resourceType` | `data.resourceType` (e.g., `"Observation"`, `"Encounter"`) |
-| `allCodes` | `data.code.coding[*]`, `data.type.coding[*]`, `data.category[*].coding[*]`, `data.clinicalStatus.coding[*]`, `data.identifier[*]` (system+value), `data.status` |
+| `allCodes` | `data.code.coding[*]`, `data.class.coding[*]`, `data.serviceType.coding[*]`, `data.clinicalStatus.coding[*]`, `data.verificationStatus.coding[*]`, `data.type[*].coding[*]`, `data.category[*].coding[*]`, `data.identifier[*]` (system+value), `data.status` |
+
+**These nine paths are the whole matchable surface.** A `codeFilter.path` naming anything else is
+indexed at protocol load and then never matched, and because Tier 1 requires *every* codeFilter of an
+action to match, one such path disables that action's trigger outright rather than loosening it. The
+list lives in `ResourceInfoExtractor.extractCodes`; extending a protocol to a new path means extending
+that method in the same change.
 
 ### 4.2 Clinical Event Time Extraction
 

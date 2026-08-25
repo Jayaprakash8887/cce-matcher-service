@@ -123,6 +123,46 @@ class ResourceInfoExtractorTest {
                 c.equals(new CodePathTriple("type", "http://snomed.info/sct", "11429006"))));
     }
 
+    // ── extractCodes — serviceType (Encounter.serviceType, 0..1 CodeableConcept) ──
+
+    @Test
+    void extractCodes_fromServiceType() {
+        // The reference ANC protocol's enrolment trigger filters on serviceType alongside type, and
+        // matching requires every codeFilter of an action to match — so a serviceType this extractor
+        // did not read would silently disable that trigger rather than weaken it.
+        JsonNode data = toJsonNode(Map.of(
+                "resourceType", "Encounter",
+                "serviceType", Map.of(
+                        "coding", List.of(
+                                Map.of("system", "http://openphc.org/service-types",
+                                        "code", "high-risk-anc")
+                        )
+                )
+        ));
+        List<CodePathTriple> codes = extractor.extractCodes(data);
+        assertTrue(codes.contains(
+                new CodePathTriple("serviceType", "http://openphc.org/service-types", "high-risk-anc")));
+    }
+
+    @Test
+    void extractCodes_typeAndServiceTypeTogether_asTheEnrolmentTriggerNeeds() {
+        // Both triples have to come out of one payload, or the AND across codeFilters can never be met.
+        JsonNode data = toJsonNode(Map.of(
+                "resourceType", "Encounter",
+                "type", List.of(Map.of("coding", List.of(
+                        Map.of("system", "http://openphc.org/encounter-types", "code", "anc-visit")))),
+                "serviceType", Map.of("coding", List.of(
+                        Map.of("system", "http://openphc.org/service-types", "code", "high-risk-anc")))
+        ));
+
+        List<CodePathTriple> codes = extractor.extractCodes(data);
+
+        assertTrue(codes.contains(
+                new CodePathTriple("type", "http://openphc.org/encounter-types", "anc-visit")));
+        assertTrue(codes.contains(
+                new CodePathTriple("serviceType", "http://openphc.org/service-types", "high-risk-anc")));
+    }
+
     // ── extractCodes — category[*].coding ──
 
     @Test

@@ -66,7 +66,7 @@ sequenceDiagram
             Note over Engine: Step 3 — Extract Resource Info
             Engine->>Engine: extractResourceType(data)
             Engine->>Engine: extractCodes(data)
-            Note over Engine: Extracts codes from code, type,<br/>category, clinicalStatus, identifier fields
+            Note over Engine: Extracts codes from code, class, serviceType,<br/>clinicalStatus, verificationStatus, type, category,<br/>identifier and status fields
         end
 
         rect rgb(248, 240, 255)
