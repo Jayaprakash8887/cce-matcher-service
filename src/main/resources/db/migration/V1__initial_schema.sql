@@ -134,9 +134,6 @@ CREATE TABLE step_instance (
 );
 
 CREATE INDEX idx_step_instance_protocol ON step_instance (protocol_instance_id);
--- The steps whose SLA can still move: not yet judged, or overdue but not yet written off.
-CREATE INDEX idx_step_instance_sla_status ON step_instance (sla_status)
-    WHERE sla_status IS NULL OR sla_status = 'OVERDUE';
 -- Locating the step a late-arriving event should complete.
 CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_id, action_id)
     WHERE step_status = 'NOT_STARTED';
@@ -150,6 +147,9 @@ CREATE INDEX idx_step_instance_completed_unjudged ON step_instance (id)
     WHERE step_status = 'COMPLETED'
       AND completed_at IS NOT NULL
       AND (sla_status IS NULL OR sla_status = 'OVERDUE');
+-- And deliberately none on sla_status alone. Nothing selects steps by it: due work comes from
+-- step_sla_state_transition (§4), and the one query that reads sla_status also filters on step_status
+-- and completed_at, so the partial index above serves it and serves it more precisely.
 
 ALTER TABLE step_instance REPLICA IDENTITY FULL;
 

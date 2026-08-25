@@ -272,8 +272,10 @@ END $$;
 
 CREATE INDEX IF NOT EXISTS idx_step_instance_not_started
     ON step_instance (protocol_instance_id, action_id) WHERE step_status = 'NOT_STARTED';
-CREATE INDEX IF NOT EXISTS idx_step_instance_sla_status
-    ON step_instance (sla_status) WHERE sla_status IS NULL OR sla_status = 'OVERDUE';
+-- Not created, and dropped where an earlier build of this release left one behind: nothing selects
+-- steps by sla_status alone. Unguarded on purpose, so it also cleans a database built by that earlier
+-- V1 rather than only a 1.x one.
+DROP INDEX IF EXISTS idx_step_instance_sla_status;
 
 -- ── 5. step_instance_history: same split, no timestamps to judge by ──────────
 DO $$
