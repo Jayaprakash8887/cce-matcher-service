@@ -3,6 +3,7 @@ package org.openphc.cce.matcher.service;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.hl7.fhir.r4.model.ResourceType;
+import org.openphc.cce.common.fhir.TriggerPath;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -41,11 +42,11 @@ public class ResourceInfoExtractor {
      * Extract coded values from FHIR resource payloads for Tier 1 structural matching.
      * Handles CodeableConcept fields (object or array), and plain string fields like "status".
      *
-     * <p><strong>This list is the set of paths a {@code codeFilter.path} can usefully name.</strong>
-     * The Protocol Service indexes whatever path a PlanDefinition declares, so a filter on a path that
-     * is not read here is indexed and then never matched — and because matching requires <em>every</em>
-     * codeFilter of an action to match, one such path silently disables the whole trigger. Adding a path
-     * to a protocol therefore means adding it here too.
+     * <p>Driven by {@link TriggerPath}, which is also what the Protocol Service validates a
+     * PlanDefinition's {@code codeFilter.path} values against. The two used to be separate lists, and a
+     * path present in the protocol's but missing from this one was indexed and then never matched —
+     * silently disabling the action, since matching requires every codeFilter of an action to match. One
+     * enum, so a new path reaches both sides in the same change.
      *
      * @param data the event payload (JsonNode representation of FHIR resource)
      * @return list of CodePathTriple with path, system, and code
@@ -56,23 +57,15 @@ public class ResourceInfoExtractor {
             return result;
         }
 
-        // CodeableConcept fields (single object): code, class, serviceType, clinicalStatus,
-        // verificationStatus
-        extractCodingsFromPath(data, "code", result);
-        extractCodingsFromPath(data, "class", result);
-        extractCodingsFromPath(data, "serviceType", result);
-        extractCodingsFromPath(data, "clinicalStatus", result);
-        extractCodingsFromPath(data, "verificationStatus", result);
-
-        // CodeableConcept fields (array): type[], category[]
-        extractCodingsFromArrayPath(data, "type", result);
-        extractCodingsFromArrayPath(data, "category", result);
-
-        // Identifier array: identifier[] has {system, value} pairs
-        extractIdentifiers(data, "identifier", result);
-
-        // Plain string field: status (e.g. "in-progress", "active", "finished", "completed")
-        extractStringField(data, "status", result);
+        for (TriggerPath triggerPath : TriggerPath.values()) {
+            String path = triggerPath.fhirPath();
+            switch (triggerPath.shape()) {
+                case CODEABLE_CONCEPT -> extractCodingsFromPath(data, path, result);
+                case CODEABLE_CONCEPT_ARRAY -> extractCodingsFromArrayPath(data, path, result);
+                case IDENTIFIER_ARRAY -> extractIdentifiers(data, path, result);
+                case PLAIN_STRING -> extractStringField(data, path, result);
+            }
+        }
 
         return result;
     }

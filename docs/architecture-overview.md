@@ -271,11 +271,17 @@ Resource metadata is extracted from the CloudEvent **payload** (`data`), never f
 | `resourceType` | `data.resourceType` (e.g., `"Observation"`, `"Encounter"`) |
 | `allCodes` | `data.code.coding[*]`, `data.class.coding[*]`, `data.serviceType.coding[*]`, `data.clinicalStatus.coding[*]`, `data.verificationStatus.coding[*]`, `data.type[*].coding[*]`, `data.category[*].coding[*]`, `data.identifier[*]` (system+value), `data.status` |
 
-**These nine paths are the whole matchable surface.** A `codeFilter.path` naming anything else is
-indexed at protocol load and then never matched, and because Tier 1 requires *every* codeFilter of an
-action to match, one such path disables that action's trigger outright rather than loosening it. The
-list lives in `ResourceInfoExtractor.extractCodes`; extending a protocol to a new path means extending
-that method in the same change.
+**These nine paths are the whole matchable surface**, and they are one list:
+[`TriggerPath`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/TriggerPath.java) in
+cce-common-util. `ResourceInfoExtractor` drives its extraction from that enum, and the Protocol Service
+validates every `codeFilter.path` against it at load, so a path reaches both sides in one change or
+neither.
+
+It used to be two lists, which is how `serviceType` came to be indexed by the parser and read by
+nothing: a path in the protocol's list but missing from the extractor's is indexed and then never
+matched, and because Tier 1 requires *every* codeFilter of an action to match, one such path disables
+that action's trigger outright rather than loosening it. The reference ANC protocol's enrolment trigger
+was dead for exactly that reason.
 
 ### 4.2 Clinical Event Time Extraction
 
