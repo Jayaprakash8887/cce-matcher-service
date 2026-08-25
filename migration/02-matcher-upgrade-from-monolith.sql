@@ -310,8 +310,8 @@ BEGIN
     ALTER TABLE step_instance_history DROP COLUMN completion_status;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_step_instance_history_step
-    ON step_instance_history (step_instance_id, changed_at);
+-- No index here, and the 1.x one dropped: nothing reads this table in Postgres (V1 §8).
+DROP INDEX IF EXISTS idx_step_instance_history_step;
 
 -- ── 6. intelligence_event_log: step_state splits, in FHIR-code form ──────────
 DO $$
@@ -347,11 +347,22 @@ BEGIN
     ALTER TABLE intelligence_event_log DROP COLUMN step_state;
 END $$;
 
--- ── 7. Indexes and replica identity V1 sets that the 1.x schema may lack ─────
+-- ── 7. Indexes and replica identity: what V1 has that 1.x lacks, and vice versa ──
 CREATE INDEX IF NOT EXISTS idx_protocol_instance_enrollment
     ON protocol_instance (patient_id, protocol_definition_id, status);
-CREATE INDEX IF NOT EXISTS idx_protocol_instance_history_instance
-    ON protocol_instance_history (protocol_instance_id, changed_at);
+
+-- Five more indexes 1.x carried that V1 does not create, each serving no query in 2.0.0 (a sixth, on
+-- step_instance_history, is dropped with that table in §5). Dropped unguarded rather than inside the 1.x
+-- branch, so this also cleans a database built by an earlier build of this release, which is the only
+-- other place they exist. The reasoning for each sits in V1 beside the table it belonged to: patient_id
+-- is the leading column of the enrolment index; deviation_type is answered by deviation_step_type_key;
+-- nothing selects intelligence events by subject or by step; and the history tables are read in
+-- ClickHouse, never here.
+DROP INDEX IF EXISTS idx_protocol_instance_patient;
+DROP INDEX IF EXISTS idx_deviation_type;
+DROP INDEX IF EXISTS idx_intelligence_event_log_subject;
+DROP INDEX IF EXISTS idx_intelligence_event_log_step_instance;
+DROP INDEX IF EXISTS idx_protocol_instance_history_instance;
 
 -- V1 sets REPLICA IDENTITY FULL on every CDC-replicated table it creates, so an upgraded database has
 -- to carry it too or Debezium sends incomplete before-images for UPDATE and DELETE. The data-pipeline's

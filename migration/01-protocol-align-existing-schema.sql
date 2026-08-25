@@ -10,7 +10,9 @@
 --
 -- The definitional tables are otherwise unchanged by the 2.0.0 split — no column of
 -- protocol_definition, action_definition or trigger_index moved, was renamed, or changed
--- type. All that differs is three indexes the 1.x schema carried that V1 deliberately does not create.
+-- type. All that differs is five indexes the 1.x schema carried that V1 deliberately does not create,
+-- each of them either a prefix of a key that already answers its lookups or an index on a table small
+-- enough to be read in a page.
 --
 -- On a greenfield database this migration is a no-op: none of the indexes it drops were ever created.
 -- ==============================================================================
@@ -29,3 +31,10 @@ DROP INDEX IF EXISTS idx_trigger_index_resource;
 -- read. Both names are dropped: the 1.x one, and the one an earlier build of this release created.
 DROP INDEX IF EXISTS idx_protocol_definition_triggers;
 DROP INDEX IF EXISTS idx_protocol_definition;
+
+-- And two on action_definition. canonical_url is the leading column of
+-- action_definition_url_version_key, which serves both the lookup by canonical URL and the lookup by
+-- URL and version, so an index on it alone was always a duplicate. The partial one on status never won
+-- either: the table holds tens of rows, and a sequential scan of two pages beats an index scan.
+DROP INDEX IF EXISTS idx_action_definition_canonical;
+DROP INDEX IF EXISTS idx_action_definition_status;

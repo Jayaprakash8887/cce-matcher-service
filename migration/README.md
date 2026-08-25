@@ -10,7 +10,7 @@ schema. See [Deployment Guide](../docs/deployment-guide.md).
 | File | Purpose |
 |---|---|
 | `run-upgrade.sh` | Runs the whole upgrade in one transaction, with preconditions and verification |
-| `01-protocol-align-existing-schema.sql` | Protocol Service's part — drops three indexes 2.0.0 does not use: two on `trigger_index` the primary key already serves, and the GIN index over `protocol_definition.definition` |
+| `01-protocol-align-existing-schema.sql` | Protocol Service's part — drops five indexes 2.0.0 does not use: two on `trigger_index` and one on `action_definition` that a key already answers, the GIN index over `protocol_definition.definition`, and the partial one on `action_definition.status` |
 | `02-matcher-upgrade-from-monolith.sql` | Matcher Service's part — the schema and data transformation |
 | `verify.sql` | Post-upgrade checks; run it any time |
 
@@ -175,7 +175,7 @@ Restoring also means putting the 1.x services back, since 2.0.0 cannot run again
 PostgreSQL 16. The upgrade was rehearsed from a 1.x database seeded with a row for every old `state`
 value plus matching history, deviation and intelligence-event rows, and the result diffed against a
 greenfield 2.0.0 schema (Protocol `V1` + Matcher `V1`). The two are **identical** — 101 columns, 33
-constraints, 37 indexes, and the same replica identity on every table. Matcher's `V2` is also a clean
+constraints, 28 indexes, and the same replica identity on every table. Matcher's `V2` is also a clean
 no-op against greenfield, which is what lets one chain serve both paths.
 
 Three of those reconciliations exist because the earlier rehearsal missed them: renaming a table or a

@@ -44,9 +44,11 @@ CREATE TABLE protocol_instance (
     CONSTRAINT protocol_instance_status_check CHECK (status IN ('ACTIVE', 'COMPLETED', 'WITHDRAWN', 'EXPIRED'))
 );
 
-CREATE INDEX idx_protocol_instance_patient ON protocol_instance (patient_id);
+-- The active-instance gauge.
 CREATE INDEX idx_protocol_instance_status ON protocol_instance (status) WHERE status = 'ACTIVE';
--- The enrolment lookup on every matched event: findByPatientIdAndProtocolDefinitionIdAndStatus.
+-- The enrolment lookup on every matched event: findByPatientIdAndProtocolDefinitionIdAndStatus. Also
+-- serves a lookup by patient_id alone, since that is its leading column — which is why there is no
+-- separate index on patient_id: the planner picks this one for that query either way.
 CREATE INDEX idx_protocol_instance_enrollment
     ON protocol_instance (patient_id, protocol_definition_id, status);
 
@@ -249,8 +251,9 @@ CREATE TABLE deviation (
     CONSTRAINT deviation_step_type_key UNIQUE (step_instance_id, deviation_type)
 );
 
-CREATE INDEX idx_deviation_type ON deviation (deviation_type);
-
+-- No index on deviation_type. The only read is findByStepInstanceIdAndDeviationType, which
+-- deviation_step_type_key answers; nothing selects deviations by type alone in Postgres, and the
+-- analytics that do run in ClickHouse against the CDC mirror.
 ALTER TABLE deviation REPLICA IDENTITY FULL;
 
 -- =============================================
@@ -282,11 +285,10 @@ CREATE TABLE intelligence_event_log (
     CONSTRAINT intelligence_event_log_pkey PRIMARY KEY (id)
 );
 
+-- The three filters the Compliance Service's API exposes, and nothing else: there is no index on
+-- subject or step_instance_id, because no query has ever selected on either.
 CREATE INDEX idx_intelligence_event_log_action_definition ON intelligence_event_log (action_definition_id);
 CREATE INDEX idx_intelligence_event_log_protocol_instance ON intelligence_event_log (protocol_instance_id);
-CREATE INDEX idx_intelligence_event_log_step_instance ON intelligence_event_log (step_instance_id)
-    WHERE step_instance_id IS NOT NULL;
-CREATE INDEX idx_intelligence_event_log_subject ON intelligence_event_log (subject);
 CREATE INDEX idx_intelligence_event_log_published ON intelligence_event_log (published) WHERE published = FALSE;
 
 ALTER TABLE intelligence_event_log REPLICA IDENTITY FULL;
@@ -343,8 +345,8 @@ CREATE TABLE step_instance_history (
     CONSTRAINT step_instance_history_pkey PRIMARY KEY (id)
 );
 
--- Reading history back means "every transition for this instance, in order".
-CREATE INDEX idx_protocol_instance_history_instance
-    ON protocol_instance_history (protocol_instance_id, changed_at);
-CREATE INDEX idx_step_instance_history_step
-    ON step_instance_history (step_instance_id, changed_at);
+-- Unindexed beyond their primary keys, on purpose. Nothing reads them in Postgres: the application
+-- only INSERTs, Debezium takes its snapshot as a full read and streams from the WAL, and the
+-- reconstruction that reads history back — "every transition for this instance, in order" — runs in
+-- ClickHouse against the replicated copy. An index here would be maintained on every status change,
+-- the highest write rate in the schema, to serve no query.
