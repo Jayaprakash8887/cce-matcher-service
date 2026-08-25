@@ -1,17 +1,23 @@
 # Data Dictionary — Matcher Service
 
-> The four tables whose JPA entities belong to this service alone.
+> The two tables whose JPA entities belong to this service alone.
 
-Nine further tables — `protocol_definition`, `protocol_instance`, `step_instance`,
-`step_sla_state_transition`, `deviation`, `trigger_index`, `action_definition` and
-`intelligence_event_log` — are mapped by entities in **cce-common-util** and documented there, once:
+Ten further tables — `protocol_definition`, `protocol_instance`, `step_instance`,
+`step_sla_state_transition`, `deviation`, `trigger_index`, `action_definition`,
+`intelligence_event_log` and the two state-transition history tables — are mapped by entities in
+**cce-common-util** and documented there, once:
 
 - [Data Dictionary](../../cce-common-util/docs/data-dictionary.md) — columns, indexes, enums, JSONB shapes, and the full ER diagram
 - [Data Dictionary §3](../../cce-common-util/docs/data-dictionary.md#3-ownership) — which service creates and which writes each table
 
-This service **runs the migration** for all thirteen tables except the four the Protocol Service owns,
-so it creates more tables than it documents here. Creating a table and mapping it are separate things:
+This service **runs the migration** for every table except the three the Protocol Service owns, so it
+creates far more tables than it documents here. Creating a table and mapping it are separate things:
 the DDL is in `V1__initial_schema.sql`, the column reference is wherever the entity lives.
+
+The history tables moved out in 2.0.0. Their entities now live in cce-common-util, because the
+Compliance Service also appends to `step_instance_history` — recording each `sla_status` transition it
+applies — so they stopped belonging to this service alone. This service still runs their DDL. See
+[Data Dictionary §12](../../cce-common-util/docs/data-dictionary.md#12-state-transition-history-tables).
 
 ---
 
@@ -21,13 +27,10 @@ the DDL is in `V1__initial_schema.sql`, the column reference is wherever the ent
 |---|-------|---------|
 | `matcher_event_log` | Lean idempotency log of every inbound CloudEvent and its processing outcome | High (every event) |
 | `facility` | Reference lookup of known facilities — auto-populated from inbound event payloads | Low (one row per facility) |
-| `protocol_instance_history` | Append-only log of every `protocol_instance.status` transition (CDC → ClickHouse) | High (per status change) |
-| `step_instance_history` | Append-only log of every `step_instance.step_status` / `sla_status` transition — this service's and the Compliance Service's, see [§4](#4-state-transition-history-tables) (CDC → ClickHouse) | High (per status change) |
 
-No other service reads or writes the first three. `step_instance_history` is the exception: the
-Compliance Service appends the `sla_status` transitions it applies, which is why §4 describes two
-writers. `matcher_event_log` in particular is this service's idempotency guard: nothing outside it
-has a reason to consult the record of which events have already been processed.
+No other service reads or writes either one. `matcher_event_log` in particular is this service's
+idempotency guard: nothing outside it has a reason to consult the record of which events have already
+been processed.
 
 ---
 
@@ -129,75 +132,7 @@ If the CloudEvent envelope already carries a `facilityid` extension attribute (s
 
 ---
 
-## 4. State-Transition History Tables
-
-Append-only audit logs that record **every** transition of the UPDATE-in-place lifecycle columns.
-They exist because `protocol_instance.status` and `step_instance.step_status` / `sla_status` are
-overwritten in place — the prior value is lost — so point-in-time analytics ("what state was this on
-date D") and historical rebuilds of the ClickHouse daily-summary MVs are otherwise impossible.
-
-- **Populated at the application layer** by the shared `StateTransitionHistoryService`, invoked from
-  `ProtocolInstanceService` / `StepInstanceService` immediately after every status/state write
-  (enrollment, event-driven completion, time-driven OVERDUE/MISSED, optional-step close-out). The
-  history INSERT runs in the **same transaction** as the parent change (`Propagation.MANDATORY`),
-  so it is atomic with the transition — no gaps across the service layer. Caveat: it does **not** capture raw out-of-band SQL UPDATEs — all
-  lifecycle mutations must go through the service layer.
-- **Append-only:** rows are only ever INSERTed. Never UPDATEd or DELETEd.
-- **CDC-synced to ClickHouse** — added to `cce_analytics_pub` and granted in the data-pipeline's
-  `cdc/01-configure-replication.sql` (not in the schema migration). Append-only, so the default PK
-  replica identity suffices. Not part of the ER diagram — they reference their direct parent by ID
-  (`protocol_instance_id` / `step_instance_id`) but enforce no FK.
-- **Lean schema — no denormalized grouping keys.** These tables carry only the direct parent id;
-  the backfill recovers `protocol_definition_id` (for protocol history) and `protocol_instance_id`
-  (for step history) by joining the immutable base tables (`protocol_instance` / `step_instance`).
-  Trade-off: if a base row is hard-deleted (only manual/out-of-band SQL does this — the app never
-  deletes these rows), its history can no longer be grouped and drops out of the backfill. Accepted:
-  a deleted instance is treated as removed from historical rollups too.
-- Consumed **only** by the historical-backfill job (`data-pipeline/schema/09-historical-backfill.sql`),
-  run after a full re-snapshot. Normal forward operation never reads them.
-
-### protocol_instance_history
-
-| Column | Type | Nullable | Description |
-|--------|------|----------|-------------|
-| `id` | `BIGSERIAL` | **NOT NULL** | Primary key (insertion order). |
-| `protocol_instance_id` | `UUID` | **NOT NULL** | The enrollment whose status changed. Backfill joins `protocol_instance` on this id to recover `protocol_definition_id`. |
-| `status` | `VARCHAR` | **NOT NULL** | The status value *after* this transition. See [ProtocolInstanceStatus](../../cce-common-util/docs/data-dictionary.md#protocolinstancestatus). |
-| `changed_at` | `TIMESTAMPTZ` | **NOT NULL** | When the transition occurred (`enrolled_at` for the initial enrollment, the transition time for subsequent status changes). |
-
-| Type | Name | Details |
-|---|---|---|
-| PK | `protocol_instance_history_pkey` | `(id)` |
-| Index | `idx_protocol_instance_history_instance` | `(protocol_instance_id, changed_at)` — reconstructing one enrolment's transitions in order |
-
-Bulk reads go through Debezium (snapshot/WAL) and analytical queries run in ClickHouse, so the table
-carries no index beyond the one its reconstruction key needs.
-
-### step_instance_history
-
-| Column | Type | Nullable | Description |
-|--------|------|----------|-------------|
-| `id` | `BIGSERIAL` | **NOT NULL** | Primary key (insertion order). |
-| `step_instance_id` | `UUID` | **NOT NULL** | The step whose state changed. Backfill joins `step_instance` on this id to recover `protocol_instance_id`. |
-| `step_status` | `VARCHAR` | **NOT NULL** | The step-status value *after* this transition. See [StepStatus](../../cce-common-util/docs/data-dictionary.md#stepstatus). |
-| `sla_status` | `VARCHAR` | Yes | The SLA-status value *after* this transition — null for a transition recorded before any threshold had fallen due. See [SlaStatus](../../cce-common-util/docs/data-dictionary.md#slastatus). |
-| `changed_at` | `TIMESTAMPTZ` | **NOT NULL** | When the transition occurred (`created_at` for the initial creation, the transition time thereafter). |
-
-| Type | Name | Details |
-|---|---|---|
-| PK | `step_instance_history_pkey` | `(id)` |
-| Index | `idx_step_instance_history_step` | `(step_instance_id, changed_at)` — same rationale as `protocol_instance_history` |
-
-> **Two writers.** Matcher records step creation and completion; the **CCE Compliance Service** records
-> each `sla_status` it applies (null → `OVERDUE` → `MISSED`, or null → `MET`). Both go through the
-> shared `StateTransitionHistoryService`, and append-only is what makes that safe — the two services
-> insert disjoint rows and neither updates the other's. Until 2.0.0 only Matcher wrote here, so every
-> time-driven transition was missing: a step that went overdue and was never completed had one row
-> instead of three. `sla_status` is nullable in this table too, mirroring the column it copies.
-
----
-
-## 5. JSONB Column Schemas
+## 4. JSONB Column Schemas
 
 ### matcher_event_log — `data`
 

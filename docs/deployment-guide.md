@@ -264,7 +264,6 @@ SELECT version, description, success FROM flyway_schema_history_matcher ORDER BY
 The HikariCP pool size should account for:
 - Kafka consumer threads (concurrency setting, default 5 in prod)
 - Tomcat thread pool (default 200, but only `/actuator` traffic — effectively idle)
-- Async audit service threads
 
 **Formula:** `maximumPoolSize ≥ (kafka_concurrency × 2) + 15`
 

@@ -37,7 +37,7 @@ curl localhost:8091/actuator/health
 | Document | Description |
 |---|---|
 | [Architecture & Design](docs/architecture-overview.md) | Core pipeline, two-tier matching, step lifecycle, progressive instantiation and backfill, flat step model |
-| [Data Dictionary](docs/data-dictionary.md) | The four tables whose entities belong to this service — `matcher_event_log`, `facility`, and the two history tables |
+| [Data Dictionary](docs/data-dictionary.md) | The two tables whose entities belong to this service — `matcher_event_log` and `facility` |
 | [Kafka Events](docs/kafka-events.md) | Topics, CloudEvents message formats, consumers, and producers |
 | [Flow Diagrams](docs/flow-diagrams.md) | Sequence and flow diagrams for the major workflows |
 | [Developer Setup](docs/developer-setup.md) | Prerequisites, build instructions, and local development configuration |
@@ -49,7 +49,7 @@ System-wide context lives in **cce-common-util** and is not restated here:
 | For | See |
 |---|---|
 | Why the services are split, and how they coordinate | `cce-common-util` → [docs/architecture-overview.md](../cce-common-util/docs/architecture-overview.md) |
-| Schema for the nine shared tables, enums, JSONB shapes, table ownership | `cce-common-util` → [docs/data-dictionary.md](../cce-common-util/docs/data-dictionary.md) |
+| Schema for the ten shared tables (including the two history tables), enums, JSONB shapes, table ownership | `cce-common-util` → [docs/data-dictionary.md](../cce-common-util/docs/data-dictionary.md) |
 | `relatedAction` direction, status vocabularies, triggers, timing units | `cce-common-util` → [docs/fhir-conformance.md](../cce-common-util/docs/fhir-conformance.md) |
 | The shared entities, parser, cache and evaluator this service uses | `cce-common-util` → [docs/library-reference.md](../cce-common-util/docs/library-reference.md) |
 | Loading and retiring definitions, building the trigger index | `cce-protocol-service` → [docs/](../cce-protocol-service/docs/architecture-overview.md) |
