@@ -10,7 +10,7 @@ schema. See [Deployment Guide](../docs/deployment-guide.md).
 | File | Purpose |
 |---|---|
 | `run-upgrade.sh` | Runs the whole upgrade in one transaction, with preconditions and verification |
-| `01-protocol-align-existing-schema.sql` | Protocol Service's part — drops two redundant `trigger_index` indexes |
+| `01-protocol-align-existing-schema.sql` | Protocol Service's part — drops two redundant `trigger_index` indexes and renames the `protocol_definition` GIN index to its V1 name |
 | `02-matcher-upgrade-from-monolith.sql` | Matcher Service's part — the schema and data transformation |
 | `verify.sql` | Post-upgrade checks; run it any time |
 
