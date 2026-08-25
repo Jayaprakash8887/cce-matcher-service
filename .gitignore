@@ -57,3 +57,4 @@ bin/
 target/
 
 .claude/
+.github/copilot-instructions.md
