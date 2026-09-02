@@ -1,18 +1,18 @@
 {
   "resourceType": "PlanDefinition",
-  "id": "ebuzima-outpatient-workflow",
-  "url": "http://openphc.org/PlanDefinition/ebuzima-outpatient-workflow",
+  "id": "sequential-steps-mixed-triggers",
+  "url": "http://openphc.org/PlanDefinition/sequential-steps-mixed-triggers",
   "version": "1.0.0",
-  "name": "EbuzimaOutpatientWorkflow",
-  "title": "Ebuzima Outpatient Diabetes Screening & Management Workflow",
+  "name": "SequentialStepsMixedTriggersProtocol",
+  "title": "Sequential Step Chain with Mixed Trigger Specificity",
   "status": "active",
   "date": "2026-04-22",
-  "description": "Tracks an outpatient visit workflow from the Ebuzima HIE: patient check-in, vitals recording, clinical consultation (chief complaints, history), laboratory ordering and results, diagnosis, and treatment prescription. Designed to match CloudEvents from the OpenHIM mediator carrying FHIR R4 resources.",
+  "description": "Fixture for the single-level case: eight steps, no nesting and no intelligence actions, chained end-to-end by relatedAction (one after-start, then after-end throughout) with non-zero offsetDuration and per-step tolerance-days. Triggers cover the full range of Tier 1 specificity in one document \u2014 resource-type-only (F1) on Encounter, ServiceRequest and MedicationRequest, plus codeFilter on code, category and clinicalStatus \u2014 alongside both must and could requiredBehavior. The clinical shape is an outpatient diabetes screening visit as an upstream EMR emits it: check-in, vitals, consultation (chief complaints, history), lab order and results, diagnosis, treatment.",
   "action": [
     {
       "id": "visit-encounter",
       "title": "Patient Visit Encounter",
-      "description": "Enrollment trigger \u2014 patient check-in at nursing station. Matches any Encounter (F1 scenario: resource type only). Encounter type coding in Ebuzima payloads uses display-only values (no code field), so codeFilter cannot be applied.",
+      "description": "Enrollment trigger \u2014 patient check-in at nursing station. Matches any Encounter (F1 scenario: resource type only). Encounter type coding in the upstream EMR payloads uses display-only values (no code field), so codeFilter cannot be applied.",
       "trigger": [
         {
           "type": "named-event",
@@ -234,7 +234,7 @@
     {
       "id": "lab-order",
       "title": "Laboratory Order",
-      "description": "Lab test ordered by clinician. Matches any ServiceRequest (F1 scenario). Ebuzima ServiceRequest payloads have non-standard category structure (object instead of array), so only resource-type matching is used.",
+      "description": "Lab test ordered by clinician. Matches any ServiceRequest (F1 scenario). The upstream ServiceRequest payloads have a non-standard category structure (object instead of array), so only resource-type matching is used.",
       "trigger": [
         {
           "type": "named-event",
@@ -348,7 +348,7 @@
     {
       "id": "diagnosis",
       "title": "Clinical Diagnosis",
-      "description": "Diagnosis recorded. Matches Condition with clinicalStatus 'active'. The Ebuzima payload carries ICD code 5A11 (Type 2 diabetes mellitus) in the code field.",
+      "description": "Diagnosis recorded. Matches Condition with clinicalStatus 'active'. The upstream payload carries ICD code 5A11 (Type 2 diabetes mellitus) in the code field.",
       "trigger": [
         {
           "type": "named-event",
@@ -410,7 +410,7 @@
     {
       "id": "treatment",
       "title": "Treatment Prescription",
-      "description": "Medication prescribed. Matches any MedicationRequest (F1 scenario). Ebuzima payloads use medicationCodeableConcept which is not in the standard extraction paths, so only resource-type matching is used. Expected medications: CAPTOPRIL 25MG (C09AA0101E), METFORMIN 500MG (A10BA0201E).",
+      "description": "Medication prescribed. Matches any MedicationRequest (F1 scenario). The upstream payloads use medicationCodeableConcept, which is not in the standard extraction paths, so only resource-type matching is used. Expected medications: CAPTOPRIL 25MG (C09AA0101E), METFORMIN 500MG (A10BA0201E).",
       "trigger": [
         {
           "type": "named-event",
