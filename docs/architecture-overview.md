@@ -211,7 +211,7 @@ org.openphc.cce.matcher
 ├── kafka/consumer/                  # InboundEventConsumer — the only consumer
 └── service/                         # MatcherEngine and the matching pipeline:
                                      #   ResourceInfoExtractor, TriggerMatchingService,
-                                     #   ClinicalEventTimeExtractor, StepInstanceService,
+                                     #   StepInstanceService,
                                      #   StepSlaScheduleService, ProtocolDefinitionService,
                                      #   ProtocolInstanceService, MatcherEventLogService,
                                      #   StateTransitionHistoryService, FacilityService
@@ -287,7 +287,7 @@ was dead for exactly that reason.
 
 When an inbound event **completes** a step, the completion is attributed to the **clinical occurrence time** — when the act actually happened — rather than the time the event reached the service. This keeps a completed step's `completed_at`, its `sla_status`, and the calculated due/missed dates of any **dependent steps** accurate even when events arrive late (offline sync, batch upload, retries, DLQ replay).
 
-`ClinicalEventTimeExtractor` derives this time from the FHIR payload using a resource-type → clinical-time-field table, handling FHIR's polymorphic `[x]` choice types by probing concrete field names in priority order:
+`ClinicalEventTimeExtractor` derives this time from the FHIR payload using a resource-type → clinical-time-field table, handling FHIR's polymorphic `[x]` choice types by probing concrete field names in priority order. It lives in [cce-common-util](../../cce-common-util/docs/library-reference.md#clinicaleventtimeextractor) because the Collector Service stamps `inbound_event_log.event_time` from the same reading: while the two services held separate copies, an `Encounter` carrying both bounds was recorded there at `period.end` and judged here at `period.start`, so the audit trail and the SLA clock disagreed about when the visit happened.
 
 | Resource type | Clinical-time fields (first match wins) |
 |---|---|

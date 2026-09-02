@@ -25,6 +25,7 @@ import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.matcher.kafka.consumer.InboundEventConsumer;
 import org.openphc.cce.common.kafka.IntelligenceTriggerProducer;
 import org.openphc.cce.matcher.service.*;
+import org.openphc.cce.common.fhir.ClinicalEventTimeExtractor;
 import org.springframework.kafka.core.KafkaTemplate;
 
 import static org.junit.jupiter.api.Assertions.*;

@@ -27,6 +27,7 @@ import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
 import org.openphc.cce.common.fhir.UnsupportedExpressionLanguageException;
 import org.openphc.cce.common.event.CloudEventMessage;
+import org.openphc.cce.common.fhir.ClinicalEventTimeExtractor;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
