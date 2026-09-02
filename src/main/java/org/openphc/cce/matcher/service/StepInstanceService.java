@@ -130,7 +130,7 @@ public class StepInstanceService {
         // Read once, to anchor an after-start dependent to when this step became active. Not used to
         // settle this step's own SLA: that is the Compliance Service's judgement, made on its next
         // sweep, by comparing the completed_at recorded below against each threshold.
-        SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.thresholdsFor(step.getId());
+        SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.getThresholds(step.getId());
 
         // sla_status is deliberately left alone. Recording that the work happened and judging whether
         // it was timely are different questions with different owners; writing both here is what used

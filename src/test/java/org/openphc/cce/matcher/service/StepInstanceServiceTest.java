@@ -79,7 +79,7 @@ class StepInstanceServiceTest {
                 slaThresholdReader);
 
         // Default: no SLA thresholds. Tests that care stub them per step via buildStep/stubThresholds.
-        lenient().when(slaThresholdReader.thresholdsFor(any()))
+        lenient().when(slaThresholdReader.getThresholds(any()))
                 .thenReturn(new SlaThresholdReader.SlaThresholds(null, null));
 
         // Default: a protocol with no steps, so tests that only assert SLA/status outcomes need not
@@ -1110,7 +1110,7 @@ class StepInstanceServiceTest {
 
     /** Stand in for the step_sla_state_transition rows this step would have been scheduled with. */
     private void stubThresholds(StepInstance step, OffsetDateTime dueDate, OffsetDateTime missedDate) {
-        lenient().when(slaThresholdReader.thresholdsFor(step.getId()))
+        lenient().when(slaThresholdReader.getThresholds(step.getId()))
                 .thenReturn(new SlaThresholdReader.SlaThresholds(dueDate, missedDate));
     }
 }
