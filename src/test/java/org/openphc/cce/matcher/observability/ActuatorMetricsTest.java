@@ -1,8 +1,8 @@
 package org.openphc.cce.matcher.observability;
 
-import org.openphc.cce.common.service.SlaThresholdReader;
-import org.openphc.cce.common.service.ActionDefinitionResolver;
-import org.openphc.cce.common.service.IntelligenceActionEvaluator;
+import org.openphc.cce.common.sla.SlaThresholdReader;
+import org.openphc.cce.common.intelligence.ActionDefinitionResolver;
+import org.openphc.cce.common.intelligence.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -20,7 +20,7 @@ import org.openphc.cce.common.repository.ActionDefinitionRepository;
 import org.openphc.cce.common.repository.DeviationRepository;
 import org.openphc.cce.common.repository.IntelligenceEventLogRepository;
 import org.openphc.cce.common.repository.ProtocolInstanceRepository;
-import org.openphc.cce.common.fhir.ExpressionEvaluationService;
+import org.openphc.cce.common.fhir.FhirExpressionEvaluator;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.matcher.kafka.consumer.InboundEventConsumer;
 import org.openphc.cce.common.kafka.IntelligenceTriggerProducer;
@@ -57,14 +57,14 @@ class ActuatorMetricsTest {
 
         // Constructing these registers their counters and timers.
         IntelligenceActionEvaluator evaluator = new IntelligenceActionEvaluator(
-                mock(ParsedProtocolCache.class), mock(ExpressionEvaluationService.class),
+                mock(ParsedProtocolCache.class), mock(FhirExpressionEvaluator.class),
                 mock(ActionDefinitionResolver.class), mock(IntelligenceTriggerProducer.class),
                 mock(IntelligenceEventLogRepository.class), mock(DeviationRepository.class),
                 new ObjectMapper(), mock(SlaThresholdReader.class), registry);
 
         MatcherEngine matcherEngine = new MatcherEngine(
                 mock(MatcherEventLogService.class), mock(ResourceInfoExtractor.class),
-                mock(TriggerMatchingService.class), mock(ExpressionEvaluationService.class),
+                mock(TriggerMatchingService.class), mock(FhirExpressionEvaluator.class),
                 mock(ProtocolDefinitionService.class), mock(ProtocolInstanceService.class),
                 mock(StepInstanceService.class), mock(ParsedProtocolCache.class),
                 evaluator, mock(ClinicalEventTimeExtractor.class), registry);

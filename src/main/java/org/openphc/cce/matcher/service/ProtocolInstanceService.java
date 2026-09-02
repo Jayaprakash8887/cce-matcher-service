@@ -3,7 +3,7 @@ package org.openphc.cce.matcher.service;
 import jakarta.persistence.EntityNotFoundException;
 import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
-import org.openphc.cce.common.service.StateTransitionHistoryService;
+import org.openphc.cce.common.history.StateTransitionHistoryWriter;
 import org.openphc.cce.common.enums.ProtocolInstanceStatus;
 import org.openphc.cce.common.repository.ProtocolInstanceRepository;
 import org.slf4j.Logger;
@@ -23,12 +23,12 @@ public class ProtocolInstanceService {
     private static final Logger log = LoggerFactory.getLogger(ProtocolInstanceService.class);
 
     private final ProtocolInstanceRepository protocolInstanceRepository;
-    private final StateTransitionHistoryService stateTransitionHistoryService;
+    private final StateTransitionHistoryWriter stateTransitionHistoryWriter;
 
     public ProtocolInstanceService(ProtocolInstanceRepository protocolInstanceRepository,
-                                   StateTransitionHistoryService stateTransitionHistoryService) {
+                                   StateTransitionHistoryWriter stateTransitionHistoryWriter) {
         this.protocolInstanceRepository = protocolInstanceRepository;
-        this.stateTransitionHistoryService = stateTransitionHistoryService;
+        this.stateTransitionHistoryWriter = stateTransitionHistoryWriter;
     }
 
     /**
@@ -58,7 +58,7 @@ public class ProtocolInstanceService {
         instance = protocolInstanceRepository.save(instance);
 
         // Capture the initial ACTIVE status in append-only history.
-        stateTransitionHistoryService.recordProtocolInstanceTransition(instance, instance.getEnrolledAt());
+        stateTransitionHistoryWriter.recordProtocolInstanceTransition(instance, instance.getEnrolledAt());
 
 
         log.info("Enrolled patient {} in protocol {} (instanceId={})",

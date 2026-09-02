@@ -9,7 +9,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.openphc.cce.common.entity.ProtocolDefinition;
-import org.openphc.cce.common.service.StateTransitionHistoryService;
+import org.openphc.cce.common.history.StateTransitionHistoryWriter;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.enums.ProtocolDefinitionStatus;
 import org.openphc.cce.common.enums.ProtocolInstanceStatus;
@@ -32,14 +32,14 @@ class ProtocolInstanceServiceTest {
 
 
     @Mock
-    private StateTransitionHistoryService stateTransitionHistoryService;
+    private StateTransitionHistoryWriter stateTransitionHistoryWriter;
 
     private ProtocolInstanceService service;
 
     @BeforeEach
     void setUp() {
         service = new ProtocolInstanceService(protocolInstanceRepository,
-                stateTransitionHistoryService);
+                stateTransitionHistoryWriter);
     }
 
     @Nested
@@ -72,7 +72,7 @@ class ProtocolInstanceServiceTest {
 
             verify(protocolInstanceRepository).save(any(ProtocolInstance.class));
             // The initial ACTIVE status is recorded in append-only history at the enrollment time.
-            verify(stateTransitionHistoryService).recordProtocolInstanceTransition(result, enrolledAt);
+            verify(stateTransitionHistoryWriter).recordProtocolInstanceTransition(result, enrolledAt);
         }
 
         @Test
@@ -94,7 +94,7 @@ class ProtocolInstanceServiceTest {
 
             assertSame(existing, result);
             verify(protocolInstanceRepository, never()).save(any());
-            verify(stateTransitionHistoryService, never()).recordProtocolInstanceTransition(any(), any());
+            verify(stateTransitionHistoryWriter, never()).recordProtocolInstanceTransition(any(), any());
         }
     }
 

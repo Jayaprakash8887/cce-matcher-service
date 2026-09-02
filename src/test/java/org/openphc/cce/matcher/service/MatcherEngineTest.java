@@ -1,6 +1,6 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.IntelligenceActionEvaluator;
+import org.openphc.cce.common.intelligence.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -22,7 +22,7 @@ import org.openphc.cce.common.enums.ProcessingStatus;
 import org.openphc.cce.common.enums.ProtocolInstanceStatus;
 import org.openphc.cce.common.enums.SlaStatus;
 import org.openphc.cce.common.enums.StepStatus;
-import org.openphc.cce.common.fhir.ExpressionEvaluationService;
+import org.openphc.cce.common.fhir.FhirExpressionEvaluator;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
 import org.openphc.cce.common.fhir.UnsupportedExpressionLanguageException;
@@ -45,7 +45,7 @@ class MatcherEngineTest {
     @Mock private MatcherEventLogService eventLogService;
     @Mock private ResourceInfoExtractor resourceInfoExtractor;
     @Mock private TriggerMatchingService triggerMatchingService;
-    @Mock private ExpressionEvaluationService expressionEvaluationService;
+    @Mock private FhirExpressionEvaluator fhirExpressionEvaluator;
     @Mock private ProtocolDefinitionService protocolDefinitionService;
     @Mock private ProtocolInstanceService protocolInstanceService;
     @Mock private StepInstanceService stepInstanceService;
@@ -63,7 +63,7 @@ class MatcherEngineTest {
         objectMapper.registerModule(new JavaTimeModule());
         meterRegistry = new SimpleMeterRegistry();
         engine = new MatcherEngine(eventLogService, resourceInfoExtractor,
-                triggerMatchingService, expressionEvaluationService,
+                triggerMatchingService, fhirExpressionEvaluator,
                 protocolDefinitionService, protocolInstanceService,
                 stepInstanceService, parsedProtocolCache,
                 intelligenceActionEvaluator, clinicalEventTimeExtractor, meterRegistry);
@@ -257,7 +257,7 @@ class MatcherEngineTest {
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of(
                     new org.openphc.cce.matcher.service.ConditionOnlyTrigger(
                             protocolDefId, "condition-action", "text/jsonlogic", "{\"==\": [1, 1]}")));
-            when(expressionEvaluationService.evaluate(eq("text/jsonlogic"), eq("{\"==\": [1, 1]}"), any()))
+            when(fhirExpressionEvaluator.evaluate(eq("text/jsonlogic"), eq("{\"==\": [1, 1]}"), any()))
                     .thenReturn(true);
             when(protocolDefinitionService.findById(protocolDefId)).thenReturn(protocolDef);
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
@@ -395,7 +395,7 @@ class MatcherEngineTest {
             // Parser returns action with a condition that fails
             mockParserReturnsWithCondition(protocolDef, "conditional-action",
                     "text/jsonlogic", "{\"==\": [1, 0]}");
-            when(expressionEvaluationService.evaluate(eq("text/jsonlogic"), eq("{\"==\": [1, 0]}"), any()))
+            when(fhirExpressionEvaluator.evaluate(eq("text/jsonlogic"), eq("{\"==\": [1, 0]}"), any()))
                     .thenReturn(false);
 
             engine.processInboundEvent(event);
@@ -423,7 +423,7 @@ class MatcherEngineTest {
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of(
                     new org.openphc.cce.matcher.service.ConditionOnlyTrigger(
                             protocolDefId, "action-cql", "text/cql", "some-expression")));
-            when(expressionEvaluationService.evaluate(eq("text/cql"), any(), any()))
+            when(fhirExpressionEvaluator.evaluate(eq("text/cql"), any(), any()))
                     .thenThrow(new UnsupportedExpressionLanguageException("text/cql"));
 
             assertThrows(UnsupportedExpressionLanguageException.class,

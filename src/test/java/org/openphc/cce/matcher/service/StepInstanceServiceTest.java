@@ -1,8 +1,8 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.SlaThresholdReader;
-import org.openphc.cce.common.service.DeviationService;
-import org.openphc.cce.common.service.IntelligenceActionEvaluator;
+import org.openphc.cce.common.sla.SlaThresholdReader;
+import org.openphc.cce.common.deviation.DeviationRecorder;
+import org.openphc.cce.common.intelligence.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,7 +16,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.openphc.cce.common.entity.Deviation;
-import org.openphc.cce.common.service.StateTransitionHistoryService;
+import org.openphc.cce.common.history.StateTransitionHistoryWriter;
 import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.StepInstance;
@@ -50,14 +50,14 @@ class StepInstanceServiceTest {
     private ParsedProtocolCache parsedProtocolCache;
 
     @Mock
-    private DeviationService deviationService;
+    private DeviationRecorder deviationRecorder;
 
 
     @Mock
     private IntelligenceActionEvaluator intelligenceActionEvaluator;
 
     @Mock
-    private StateTransitionHistoryService stateTransitionHistoryService;
+    private StateTransitionHistoryWriter stateTransitionHistoryWriter;
 
     @Mock
     private StepSlaScheduleService slaScheduleService;
@@ -74,12 +74,12 @@ class StepInstanceServiceTest {
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
         service = new StepInstanceService(stepInstanceRepository,
-                parsedProtocolCache, deviationService,
-                intelligenceActionEvaluator, stateTransitionHistoryService, slaScheduleService,
+                parsedProtocolCache, deviationRecorder,
+                intelligenceActionEvaluator, stateTransitionHistoryWriter, slaScheduleService,
                 slaThresholdReader);
 
         // Default: no SLA thresholds. Tests that care stub them per step via buildStep/stubThresholds.
-        lenient().when(slaThresholdReader.thresholds(any()))
+        lenient().when(slaThresholdReader.thresholdsFor(any()))
                 .thenReturn(new SlaThresholdReader.SlaThresholds(null, null));
 
         // Default: a protocol with no steps, so tests that only assert SLA/status outcomes need not
@@ -122,7 +122,7 @@ class StepInstanceServiceTest {
             // The thresholds are scheduled as step_sla_state_transition rows, not stored on the step.
             verify(slaScheduleService).schedule(result, dueDate, missedDate);
             // The initial NOT_STARTED/PENDING status is recorded in append-only history.
-            verify(stateTransitionHistoryService).recordStepInstanceTransition(eq(result), any());
+            verify(stateTransitionHistoryWriter).recordStepInstanceTransition(eq(result), any());
         }
     }
 
@@ -150,7 +150,7 @@ class StepInstanceServiceTest {
             assertEquals("test-source", step.getCompletedBySource());
 
             // The COMPLETED transition is recorded in append-only history.
-            verify(stateTransitionHistoryService).recordStepInstanceTransition(eq(step), any(OffsetDateTime.class));
+            verify(stateTransitionHistoryWriter).recordStepInstanceTransition(eq(step), any(OffsetDateTime.class));
         }
 
         @Test
@@ -668,12 +668,12 @@ class StepInstanceServiceTest {
             stubProtocol(actions);
 
             Deviation deviation = Deviation.builder().id(UUID.randomUUID()).build();
-            when(deviationService.createDeviation(any(), eq(DeviationType.ORDER_VIOLATION), any()))
-                    .thenReturn(new DeviationService.DeviationResult(deviation, true));
+            when(deviationRecorder.recordDeviation(any(), eq(DeviationType.ORDER_VIOLATION), any()))
+                    .thenReturn(new DeviationRecorder.DeviationResult(deviation, true));
 
             service.completeStep(completedStep, UUID.randomUUID(), "test-source", null);
 
-            verify(deviationService).createDeviation(
+            verify(deviationRecorder).recordDeviation(
                     eq(completedStep), eq(DeviationType.ORDER_VIOLATION),
                     argThat(metadata -> {
                         @SuppressWarnings("unchecked")
@@ -724,7 +724,7 @@ class StepInstanceServiceTest {
 
             service.completeStep(completedStep, UUID.randomUUID(), "test-source", null);
 
-            verify(deviationService, never()).createDeviation(
+            verify(deviationRecorder, never()).recordDeviation(
                     any(), eq(DeviationType.ORDER_VIOLATION), any());
         }
 
@@ -769,7 +769,7 @@ class StepInstanceServiceTest {
 
             service.completeStep(completedStep, UUID.randomUUID(), "test-source", null);
 
-            verify(deviationService, never()).createDeviation(
+            verify(deviationRecorder, never()).recordDeviation(
                     any(), eq(DeviationType.ORDER_VIOLATION), any());
         }
 
@@ -805,7 +805,7 @@ class StepInstanceServiceTest {
 
             service.completeStep(completedStep, UUID.randomUUID(), "test-source", null);
 
-            verify(deviationService, never()).createDeviation(
+            verify(deviationRecorder, never()).recordDeviation(
                     any(), eq(DeviationType.ORDER_VIOLATION), any());
         }
     }
@@ -1110,7 +1110,7 @@ class StepInstanceServiceTest {
 
     /** Stand in for the step_sla_state_transition rows this step would have been scheduled with. */
     private void stubThresholds(StepInstance step, OffsetDateTime dueDate, OffsetDateTime missedDate) {
-        lenient().when(slaThresholdReader.thresholds(step.getId()))
+        lenient().when(slaThresholdReader.thresholdsFor(step.getId()))
                 .thenReturn(new SlaThresholdReader.SlaThresholds(dueDate, missedDate));
     }
 }

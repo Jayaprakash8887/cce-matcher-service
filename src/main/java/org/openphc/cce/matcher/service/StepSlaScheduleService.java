@@ -31,7 +31,7 @@ import java.util.UUID;
  * in which a step exists with no schedule (or a schedule with no step).
  *
  * <p>Write-only. Reading a step's thresholds back is
- * {@link org.openphc.cce.common.service.SlaThresholdReader}, shared with the Compliance Service so the
+ * {@link org.openphc.cce.common.sla.SlaThresholdReader}, shared with the Compliance Service so the
  * two cannot drift on how a schedule is interpreted.
  */
 @Service

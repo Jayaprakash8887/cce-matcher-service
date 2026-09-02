@@ -1,6 +1,6 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.ActionDefinitionResolver;
+import org.openphc.cce.common.intelligence.ActionDefinitionResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;

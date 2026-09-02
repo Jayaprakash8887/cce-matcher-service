@@ -180,8 +180,8 @@ repo must be checked out next to this one or the build fails** — see
 
 Anything more than one service must agree on: the shared entities and repositories, the status enums,
 the Kafka wire contracts (`CloudEventMessage`, `IntelligenceTriggerEvent`), the FHIR layer
-(`PlanDefinitionParser`, `ParsedProtocolCache`, `ExpressionEvaluationService`) and the shared services
-(`DeviationService`, `StateTransitionHistoryService`, `IntelligenceActionEvaluator`, `ActionDefinitionResolver`,
+(`PlanDefinitionParser`, `ParsedProtocolCache`, `FhirExpressionEvaluator`) and the shared services
+(`DeviationRecorder`, `StateTransitionHistoryWriter`, `IntelligenceActionEvaluator`, `ActionDefinitionResolver`,
 `SlaThresholdReader`).
 
 That inventory is not restated here — see
@@ -214,7 +214,7 @@ org.openphc.cce.matcher
                                      #   StepInstanceService,
                                      #   StepSlaScheduleService, ProtocolDefinitionService,
                                      #   ProtocolInstanceService, MatcherEventLogService,
-                                     #   StateTransitionHistoryService, FacilityService
+                                     #   StateTransitionHistoryWriter, FacilityService
                                      #   + records CodePathTriple, ConditionOnlyTrigger, MatchedStep
 ```
 
@@ -229,7 +229,7 @@ widened explicitly on `MatcherServiceApplication`:
 | `@EntityScan("org.openphc.cce")` | `@Entity` types are not found by component scanning |
 | `@EnableJpaRepositories("org.openphc.cce")` | Nor are Spring Data repository interfaces |
 
-> One consequence worth knowing: `common.web.GlobalExceptionHandler` is a `@ControllerAdvice` and is
+> One consequence worth knowing: `common.exception.GlobalExceptionHandler` is a `@ControllerAdvice` and is
 > therefore registered here too. It is inert — this service has no controllers for it to advise — but it
 > is on the context.
 

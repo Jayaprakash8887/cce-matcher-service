@@ -1,6 +1,6 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.IntelligenceActionEvaluator;
+import org.openphc.cce.common.intelligence.IntelligenceActionEvaluator;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -11,7 +11,7 @@ import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.enums.ProcessingStatus;
-import org.openphc.cce.common.fhir.ExpressionEvaluationService;
+import org.openphc.cce.common.fhir.FhirExpressionEvaluator;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
 import org.openphc.cce.common.event.CloudEventMessage;
@@ -42,7 +42,7 @@ public class MatcherEngine {
     private final MatcherEventLogService eventLogService;
     private final ResourceInfoExtractor resourceInfoExtractor;
     private final TriggerMatchingService triggerMatchingService;
-    private final ExpressionEvaluationService expressionEvaluationService;
+    private final FhirExpressionEvaluator fhirExpressionEvaluator;
     private final ProtocolDefinitionService protocolDefinitionService;
     private final ProtocolInstanceService protocolInstanceService;
     private final StepInstanceService stepInstanceService;
@@ -60,7 +60,7 @@ public class MatcherEngine {
     public MatcherEngine(MatcherEventLogService eventLogService,
                             ResourceInfoExtractor resourceInfoExtractor,
                             TriggerMatchingService triggerMatchingService,
-                            ExpressionEvaluationService expressionEvaluationService,
+                            FhirExpressionEvaluator fhirExpressionEvaluator,
                             ProtocolDefinitionService protocolDefinitionService,
                             ProtocolInstanceService protocolInstanceService,
                             StepInstanceService stepInstanceService,
@@ -71,7 +71,7 @@ public class MatcherEngine {
         this.eventLogService = eventLogService;
         this.resourceInfoExtractor = resourceInfoExtractor;
         this.triggerMatchingService = triggerMatchingService;
-        this.expressionEvaluationService = expressionEvaluationService;
+        this.fhirExpressionEvaluator = fhirExpressionEvaluator;
         this.protocolDefinitionService = protocolDefinitionService;
         this.protocolInstanceService = protocolInstanceService;
         this.stepInstanceService = stepInstanceService;
@@ -209,7 +209,7 @@ public class MatcherEngine {
 
         // Triggers with a condition and no data[] are matched on the condition alone
         for (ConditionOnlyTrigger trigger : conditionOnlyTriggers) {
-            boolean result = expressionEvaluationService.evaluate(
+            boolean result = fhirExpressionEvaluator.evaluate(
                     trigger.conditionLanguage(), trigger.conditionExpression(), eventData);
             if (result) {
                 finalMatches.add(new MatchedStep(trigger.protocolDefinitionId(), trigger.actionId()));
@@ -223,7 +223,7 @@ public class MatcherEngine {
                                                JsonNode eventData) {
         for (PlanDefinitionParser.TriggerInfo trigger : stepMetadata.triggers()) {
             if (trigger.condition() != null) {
-                boolean result = expressionEvaluationService.evaluate(
+                boolean result = fhirExpressionEvaluator.evaluate(
                         trigger.condition().language(),
                         trigger.condition().expression(),
                         eventData);

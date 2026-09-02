@@ -1,12 +1,12 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.service.SlaThresholdReader;
-import org.openphc.cce.common.service.DeviationService;
-import org.openphc.cce.common.service.IntelligenceActionEvaluator;
+import org.openphc.cce.common.sla.SlaThresholdReader;
+import org.openphc.cce.common.deviation.DeviationRecorder;
+import org.openphc.cce.common.intelligence.IntelligenceActionEvaluator;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.StepInstance;
-import org.openphc.cce.common.service.StateTransitionHistoryService;
+import org.openphc.cce.common.history.StateTransitionHistoryWriter;
 import org.openphc.cce.common.enums.DeviationType;
 import org.openphc.cce.common.enums.SlaStatus;
 import org.openphc.cce.common.enums.StepStatus;
@@ -46,24 +46,24 @@ public class StepInstanceService {
 
     private final StepInstanceRepository stepInstanceRepository;
     private final ParsedProtocolCache parsedProtocolCache;
-    private final DeviationService deviationService;
+    private final DeviationRecorder deviationRecorder;
     private final IntelligenceActionEvaluator intelligenceActionEvaluator;
-    private final StateTransitionHistoryService stateTransitionHistoryService;
+    private final StateTransitionHistoryWriter stateTransitionHistoryWriter;
     private final StepSlaScheduleService slaScheduleService;
     private final SlaThresholdReader slaThresholdReader;
 
     public StepInstanceService(StepInstanceRepository stepInstanceRepository,
                                ParsedProtocolCache parsedProtocolCache,
-                               DeviationService deviationService,
+                               DeviationRecorder deviationRecorder,
                                IntelligenceActionEvaluator intelligenceActionEvaluator,
-                               StateTransitionHistoryService stateTransitionHistoryService,
+                               StateTransitionHistoryWriter stateTransitionHistoryWriter,
                                StepSlaScheduleService slaScheduleService,
                                SlaThresholdReader slaThresholdReader) {
         this.stepInstanceRepository = stepInstanceRepository;
         this.parsedProtocolCache = parsedProtocolCache;
-        this.deviationService = deviationService;
+        this.deviationRecorder = deviationRecorder;
         this.intelligenceActionEvaluator = intelligenceActionEvaluator;
-        this.stateTransitionHistoryService = stateTransitionHistoryService;
+        this.stateTransitionHistoryWriter = stateTransitionHistoryWriter;
         this.slaScheduleService = slaScheduleService;
         this.slaThresholdReader = slaThresholdReader;
     }
@@ -95,7 +95,7 @@ public class StepInstanceService {
         slaScheduleService.schedule(step, dueDate, missedDate);
 
         // Capture the initial NOT_STARTED status in append-only history.
-        stateTransitionHistoryService.recordStepInstanceTransition(step, step.getCreatedAt());
+        stateTransitionHistoryWriter.recordStepInstanceTransition(step, step.getCreatedAt());
 
         log.info("Created step instance: actionId={}, repeatIndex={}, instanceId={}, stepId={}, due={}, missed={}",
                 actionId, repeatIndex, protocolInstance.getId(), step.getId(), dueDate, missedDate);
@@ -130,7 +130,7 @@ public class StepInstanceService {
         // Read once, to anchor an after-start dependent to when this step became active. Not used to
         // settle this step's own SLA: that is the Compliance Service's judgement, made on its next
         // sweep, by comparing the completed_at recorded below against each threshold.
-        SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.thresholds(step.getId());
+        SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.thresholdsFor(step.getId());
 
         // sla_status is deliberately left alone. Recording that the work happened and judging whether
         // it was timely are different questions with different owners; writing both here is what used
@@ -143,7 +143,7 @@ public class StepInstanceService {
         stepInstanceRepository.save(step);
 
         // Capture the COMPLETED transition in append-only history.
-        stateTransitionHistoryService.recordStepInstanceTransition(step, now);
+        stateTransitionHistoryWriter.recordStepInstanceTransition(step, now);
 
 
         log.info("Completed step: stepId={}, actionId={}, completedAt={} (SLA judged by Compliance)",
@@ -239,7 +239,7 @@ public class StepInstanceService {
             // Key kept as-is: it is persisted in deviation.metadata and read downstream.
             metadata.put("completedActionId", completedStepId);
 
-            DeviationService.DeviationResult result = deviationService.createDeviation(completedStep,
+            DeviationRecorder.DeviationResult result = deviationRecorder.recordDeviation(completedStep,
                     DeviationType.ORDER_VIOLATION, metadata);
 
             // Skip the warning + intelligence evaluation if this order violation was already

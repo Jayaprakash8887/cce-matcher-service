@@ -67,16 +67,16 @@ cce.events.inbound → InboundEventConsumer → MatcherEngine
                                               ├── Idempotency (MatcherEventLogService)
                                               ├── Resource Extraction (ResourceInfoExtractor)
                                               ├── Tier 1 Matching (TriggerMatchingService → trigger_index)
-                                              ├── Tier 2 Evaluation (ExpressionEvaluationService *)
+                                              ├── Tier 2 Evaluation (FhirExpressionEvaluator *)
                                               ├── Enrollment (ProtocolInstanceService)
                                               ├── Step Management (StepInstanceService)
                                               │   ├── Flat step model (sub-steps flattened to peers)
                                               │   ├── SLA schedule (StepSlaScheduleService)
-                                              │   ├── Order-violation detection (DeviationService *)
+                                              │   ├── Order-violation detection (DeviationRecorder *)
                                               │   └── Intelligence Evaluation (IntelligenceActionEvaluator *)
                                               ├── Intelligence Publishing (IntelligenceTriggerProducer *
                                               │                            → cce.intelligence.triggers)
-                                              └── State history (StateTransitionHistoryService *)
+                                              └── State history (StateTransitionHistoryWriter *)
 
 Startup + every 60s: ProtocolDefinitionService.refreshProtocolCaches()
                        └── reconciles ParsedProtocolCache * + condition-only triggers against the DB

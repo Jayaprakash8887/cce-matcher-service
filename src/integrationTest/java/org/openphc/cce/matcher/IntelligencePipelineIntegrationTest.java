@@ -18,7 +18,7 @@ import org.openphc.cce.common.enums.SlaStatus;
 import org.openphc.cce.common.enums.StepStatus;
 import org.openphc.cce.matcher.domain.repository.*;
 import org.openphc.cce.common.event.CloudEventMessage;
-import org.openphc.cce.common.service.ActionDefinitionResolver;
+import org.openphc.cce.common.intelligence.ActionDefinitionResolver;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;

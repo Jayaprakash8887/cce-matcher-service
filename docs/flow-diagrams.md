@@ -19,7 +19,7 @@ sequenceDiagram
     participant EventLog as MatcherEventLogService
     participant TriggerMatch as TriggerMatchingService
     participant Parser as PlanDefinitionParser
-    participant ExprEval as ExpressionEvaluationService<br/>(JSONLogic + FHIRPath)
+    participant ExprEval as FhirExpressionEvaluator<br/>(JSONLogic + FHIRPath)
     participant ProtoInst as ProtocolInstanceService
     participant StepInst as StepInstanceService
     participant Intel as IntelligenceActionEvaluator
@@ -275,7 +275,7 @@ been written off.
 > There is no `EARLY` or `ON_TIME` status. The 1.x schema had a separate `completion_status` column with
 > `EARLY`/`ON_TIME`/`LATE`; `V2` drops it, because the pair above already expresses it —
 > `COMPLETED`+`MET` is on time, `COMPLETED`+`OVERDUE`/`MISSED` is late. See
-> [`SlaStatus`](data-dictionary.md#slastatus) for the full value reference.
+> [`SlaStatus`](../../cce-common-util/docs/data-dictionary.md#slastatus) for the full value reference.
 
 ## 5. Deviation Detection & Recording
 
@@ -291,7 +291,7 @@ flowchart TD
     T2["completeStep(): a must-predecessor is still outstanding<br/>(detectOrderViolations)"]
     T2 -->|"type=ORDER_VIOLATION<br/>+ incompletePrerequisites metadata"| RD
 
-    RD["DeviationService.createDeviation()"]
+    RD["DeviationRecorder.recordDeviation()"]
     RD --> DX{"Deviation of this type<br/>already exists for step?"}
     DX -->|"Yes (redelivery / concurrent)"| DXR["Return DeviationResult(existing, created=false)<br/>— no insert, caller skips intelligence eval"]
     DX -->|"No"| D1["Build Deviation: type, detectedAt = now(),<br/>metadata from the caller,<br/>linked to the StepInstance (the enrolment is reached through it)"]
@@ -309,7 +309,7 @@ sequenceDiagram
     participant Trigger as Deviation Detection /<br/>Step Completion
     participant Evaluator as IntelligenceActionEvaluator
     participant Parser as PlanDefinitionParser
-    participant ExprEval as ExpressionEvaluationService
+    participant ExprEval as FhirExpressionEvaluator
     participant ActionDefSvc as ActionDefinitionService
     participant Producer as IntelligenceTriggerProducer
     participant Kafka as Apache Kafka
