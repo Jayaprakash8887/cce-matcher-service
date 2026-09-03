@@ -3,7 +3,6 @@ package org.openphc.cce.matcher.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.hl7.fhir.r4.model.ResourceType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -24,35 +23,6 @@ class ResourceInfoExtractorTest {
 
     private JsonNode toJsonNode(Object obj) {
         return objectMapper.valueToTree(obj);
-    }
-
-    // ── extractResourceType ──
-
-    @Test
-    void extractResourceType_encounter() {
-        JsonNode data = toJsonNode(Map.of("resourceType", "Encounter"));
-        assertEquals(ResourceType.Encounter, extractor.extractResourceType(data));
-    }
-
-    @Test
-    void extractResourceType_observation() {
-        JsonNode data = toJsonNode(Map.of("resourceType", "Observation"));
-        assertEquals(ResourceType.Observation, extractor.extractResourceType(data));
-    }
-
-    @Test
-    void extractResourceType_nullData_returnsNull() {
-        assertNull(extractor.extractResourceType(null));
-    }
-
-    @Test
-    void extractResourceType_missingField_returnsNull() {
-        assertNull(extractor.extractResourceType(toJsonNode(Map.of())));
-    }
-
-    @Test
-    void extractResourceType_nonStringValue_returnsNull() {
-        assertNull(extractor.extractResourceType(toJsonNode(Map.of("resourceType", 123))));
     }
 
     // ── extractCodes — code.coding ──
@@ -396,11 +366,4 @@ class ResourceInfoExtractorTest {
                 codes.stream().filter(c -> "identifier".equals(c.path())).toList());
     }
 
-    @Test
-    void extractResourceType_unknownResourceTypeIsNullRatherThanAFailure() {
-        // Non-FHIR application/json events reach the same extractor; they must simply match no
-        // trigger instead of failing the consumer.
-        assertNull(extractor.extractResourceType(
-                objectMapper.valueToTree(Map.of("resourceType", "NotAFhirResource"))));
-    }
 }

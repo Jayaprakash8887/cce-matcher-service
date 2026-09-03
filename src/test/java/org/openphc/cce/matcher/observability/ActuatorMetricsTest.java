@@ -22,6 +22,7 @@ import org.openphc.cce.common.repository.IntelligenceEventLogRepository;
 import org.openphc.cce.common.repository.ProtocolInstanceRepository;
 import org.openphc.cce.common.fhir.FhirExpressionEvaluator;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
+import org.openphc.cce.common.fhir.ResourceTypeDetector;
 import org.openphc.cce.matcher.kafka.consumer.InboundEventConsumer;
 import org.openphc.cce.common.kafka.IntelligenceTriggerProducer;
 import org.openphc.cce.matcher.service.*;
@@ -63,7 +64,8 @@ class ActuatorMetricsTest {
                 new ObjectMapper(), mock(SlaThresholdReader.class), registry);
 
         MatcherEngine matcherEngine = new MatcherEngine(
-                mock(MatcherEventLogService.class), mock(ResourceInfoExtractor.class),
+                mock(MatcherEventLogService.class), mock(ResourceTypeDetector.class),
+                mock(ResourceInfoExtractor.class),
                 mock(TriggerMatchingService.class), mock(FhirExpressionEvaluator.class),
                 mock(ProtocolDefinitionService.class), mock(ProtocolInstanceService.class),
                 mock(StepInstanceService.class), mock(ParsedProtocolCache.class),

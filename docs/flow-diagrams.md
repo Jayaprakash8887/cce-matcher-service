@@ -64,7 +64,7 @@ sequenceDiagram
 
         rect rgb(255, 248, 240)
             Note over Engine: Step 3 — Extract Resource Info
-            Engine->>Engine: extractResourceType(data)
+            Engine->>Engine: ResourceTypeDetector.detect(data)
             Engine->>Engine: extractCodes(data)
             Note over Engine: Extracts codes from code, class, serviceType,<br/>clinicalStatus, verificationStatus, type, category,<br/>identifier and status fields
         end

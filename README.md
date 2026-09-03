@@ -65,7 +65,8 @@ Gradle composite build assumes.
 ```
 cce.events.inbound → InboundEventConsumer → MatcherEngine
                                               ├── Idempotency (MatcherEventLogService)
-                                              ├── Resource Extraction (ResourceInfoExtractor)
+                                              ├── Resource Type (ResourceTypeDetector *)
+                                              ├── Code Extraction (ResourceInfoExtractor)
                                               ├── Tier 1 Matching (TriggerMatchingService → trigger_index)
                                               ├── Tier 2 Evaluation (FhirExpressionEvaluator *)
                                               ├── Enrollment (ProtocolInstanceService)

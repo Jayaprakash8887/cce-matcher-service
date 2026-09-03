@@ -210,7 +210,9 @@ org.openphc.cce.matcher
 │                                    #   and TriggerIndexRepository (the Tier 1 match)
 ├── kafka/consumer/                  # InboundEventConsumer — the only consumer
 └── service/                         # MatcherEngine and the matching pipeline:
-                                     #   ResourceInfoExtractor, TriggerMatchingService,
+                                     #   ResourceInfoExtractor (codes; the resource type
+                                     #   comes from common-util's ResourceTypeDetector),
+                                     #   TriggerMatchingService,
                                      #   StepInstanceService,
                                      #   StepSlaScheduleService, ProtocolDefinitionService,
                                      #   ProtocolInstanceService, MatcherEventLogService,
@@ -275,7 +277,9 @@ Resource metadata is extracted from the CloudEvent **payload** (`data`), never f
 [`TriggerPath`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/TriggerPath.java) in
 cce-common-util. `ResourceInfoExtractor` drives its extraction from that enum, and the Protocol Service
 validates every `codeFilter.path` against it at load, so a path reaches both sides in one change or
-neither.
+neither. The `resourceType` row above is read by
+[`ResourceTypeDetector`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/ResourceTypeDetector.java),
+also in cce-common-util, because the Collector Service needs the same reading of the same payload.
 
 It used to be two lists, which is how `serviceType` came to be indexed by the parser and read by
 nothing: a path in the protocol's list but missing from the extractor's is indexed and then never

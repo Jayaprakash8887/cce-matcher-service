@@ -2,7 +2,6 @@ package org.openphc.cce.matcher.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-import org.hl7.fhir.r4.model.ResourceType;
 import org.openphc.cce.common.fhir.TriggerPath;
 import org.springframework.stereotype.Component;
 
@@ -10,33 +9,13 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Extracts resource type and coded values from FHIR resource payloads.
- * Used to prepare inputs for Tier 1 structural matching.
+ * Extracts coded values from FHIR resource payloads. Used to prepare inputs for Tier 1 structural
+ * matching, alongside the resource type, which
+ * {@link org.openphc.cce.common.fhir.ResourceTypeDetector} reads — the Collector Service needs the
+ * same reading, so it lives in cce-common-util rather than here.
  */
 @Component
 public class ResourceInfoExtractor {
-
-    /**
-     * Extract the FHIR resource type from the event data payload.
-     *
-     * @param data the event payload (JsonNode representation of FHIR resource)
-     * @return the {@link ResourceType}, or null if absent or not a known FHIR resource type
-     * (e.g. non-FHIR {@code application/json} payloads) — such events simply match no triggers
-     */
-    public ResourceType extractResourceType(JsonNode data) {
-        if (data == null || data.isNull()) {
-            return null;
-        }
-        JsonNode resourceType = data.get("resourceType");
-        if (resourceType == null || !resourceType.isTextual()) {
-            return null;
-        }
-        try {
-            return ResourceType.valueOf(resourceType.asText());
-        } catch (IllegalArgumentException e) {
-            return null;
-        }
-    }
 
     /**
      * Extract coded values from FHIR resource payloads for Tier 1 structural matching.

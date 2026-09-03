@@ -14,6 +14,7 @@ import org.openphc.cce.common.enums.ProcessingStatus;
 import org.openphc.cce.common.fhir.FhirExpressionEvaluator;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
+import org.openphc.cce.common.fhir.ResourceTypeDetector;
 import org.openphc.cce.common.event.CloudEventMessage;
 import org.openphc.cce.common.fhir.ClinicalEventTimeExtractor;
 import org.slf4j.Logger;
@@ -40,6 +41,7 @@ public class MatcherEngine {
     private static final Logger log = LoggerFactory.getLogger(MatcherEngine.class);
 
     private final MatcherEventLogService eventLogService;
+    private final ResourceTypeDetector resourceTypeDetector;
     private final ResourceInfoExtractor resourceInfoExtractor;
     private final TriggerMatchingService triggerMatchingService;
     private final FhirExpressionEvaluator fhirExpressionEvaluator;
@@ -58,6 +60,7 @@ public class MatcherEngine {
     private final Timer eventProcessingTimer;
 
     public MatcherEngine(MatcherEventLogService eventLogService,
+                            ResourceTypeDetector resourceTypeDetector,
                             ResourceInfoExtractor resourceInfoExtractor,
                             TriggerMatchingService triggerMatchingService,
                             FhirExpressionEvaluator fhirExpressionEvaluator,
@@ -69,6 +72,7 @@ public class MatcherEngine {
                             ClinicalEventTimeExtractor clinicalEventTimeExtractor,
                             MeterRegistry meterRegistry) {
         this.eventLogService = eventLogService;
+        this.resourceTypeDetector = resourceTypeDetector;
         this.resourceInfoExtractor = resourceInfoExtractor;
         this.triggerMatchingService = triggerMatchingService;
         this.fhirExpressionEvaluator = fhirExpressionEvaluator;
@@ -128,7 +132,7 @@ public class MatcherEngine {
         }
 
         JsonNode data = event.getData();
-        ResourceType resourceType = resourceInfoExtractor.extractResourceType(data);
+        ResourceType resourceType = resourceTypeDetector.detect(data);
         List<CodePathTriple> codes = resourceInfoExtractor.extractCodes(data);
 
         List<MatchedStep> finalMatches = matchingDurationTimer.record(() ->
@@ -278,7 +282,7 @@ public class MatcherEngine {
      */
     private OffsetDateTime resolveOccurredAt(CloudEventMessage event) {
         if (isFhir(event)) {
-            ResourceType resourceType = resourceInfoExtractor.extractResourceType(event.getData());
+            ResourceType resourceType = resourceTypeDetector.detect(event.getData());
             OffsetDateTime clinical = clinicalEventTimeExtractor.extract(resourceType, event.getData());
             if (clinical != null) {
                 return clinical;
