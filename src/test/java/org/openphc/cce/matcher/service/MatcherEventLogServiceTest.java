@@ -86,10 +86,10 @@ class MatcherEventLogServiceTest {
         assertEquals(ProcessingStatus.ZERO_MATCH, saved.getProcessingStatus());
 
         // Verify data is converted to JsonNode
-        JsonNode data = saved.getData();
-        assertNotNull(data);
-        assertEquals("Observation", data.get("resourceType").asText());
-        assertEquals("final", data.get("status").asText());
+        JsonNode eventData = saved.getData();
+        assertNotNull(eventData);
+        assertEquals("Observation", eventData.get("resourceType").asText());
+        assertEquals("final", eventData.get("status").asText());
     }
 
     @Test

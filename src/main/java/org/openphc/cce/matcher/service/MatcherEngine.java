@@ -42,7 +42,7 @@ public class MatcherEngine {
 
     private final MatcherEventLogService eventLogService;
     private final ResourceTypeDetector resourceTypeDetector;
-    private final ResourceInfoExtractor resourceInfoExtractor;
+    private final EventCodesExtractor eventCodesExtractor;
     private final TriggerMatchingService triggerMatchingService;
     private final FhirExpressionEvaluator fhirExpressionEvaluator;
     private final ProtocolDefinitionService protocolDefinitionService;
@@ -61,7 +61,7 @@ public class MatcherEngine {
 
     public MatcherEngine(MatcherEventLogService eventLogService,
                             ResourceTypeDetector resourceTypeDetector,
-                            ResourceInfoExtractor resourceInfoExtractor,
+                            EventCodesExtractor eventCodesExtractor,
                             TriggerMatchingService triggerMatchingService,
                             FhirExpressionEvaluator fhirExpressionEvaluator,
                             ProtocolDefinitionService protocolDefinitionService,
@@ -73,7 +73,7 @@ public class MatcherEngine {
                             MeterRegistry meterRegistry) {
         this.eventLogService = eventLogService;
         this.resourceTypeDetector = resourceTypeDetector;
-        this.resourceInfoExtractor = resourceInfoExtractor;
+        this.eventCodesExtractor = eventCodesExtractor;
         this.triggerMatchingService = triggerMatchingService;
         this.fhirExpressionEvaluator = fhirExpressionEvaluator;
         this.protocolDefinitionService = protocolDefinitionService;
@@ -131,12 +131,12 @@ public class MatcherEngine {
             return;
         }
 
-        JsonNode data = event.getData();
-        ResourceType resourceType = resourceTypeDetector.detect(data);
-        List<CodePathTriple> codes = resourceInfoExtractor.extractCodes(data);
+        JsonNode eventData = event.getData();
+        ResourceType resourceType = resourceTypeDetector.detect(eventData);
+        List<CodePathTriple> codes = eventCodesExtractor.extractCodes(eventData);
 
         List<MatchedStep> finalMatches = matchingDurationTimer.record(() ->
-                performTwoTierMatching(resourceType, codes, data));
+                performTwoTierMatching(resourceType, codes, eventData));
 
         if (finalMatches != null && !finalMatches.isEmpty()) {
             for (MatchedStep match : finalMatches) {

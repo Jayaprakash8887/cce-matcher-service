@@ -210,7 +210,7 @@ org.openphc.cce.matcher
 │                                    #   and TriggerIndexRepository (the Tier 1 match)
 ├── kafka/consumer/                  # InboundEventConsumer — the only consumer
 └── service/                         # MatcherEngine and the matching pipeline:
-                                     #   ResourceInfoExtractor (codes; the resource type
+                                     #   EventCodesExtractor (codes; the resource type
                                      #   comes from common-util's ResourceTypeDetector),
                                      #   TriggerMatchingService,
                                      #   StepInstanceService,
@@ -275,7 +275,7 @@ Resource metadata is extracted from the CloudEvent **payload** (`data`), never f
 
 **These nine paths are the whole matchable surface**, and they are one list:
 [`TriggerPath`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/TriggerPath.java) in
-cce-common-util. `ResourceInfoExtractor` drives its extraction from that enum, and the Protocol Service
+cce-common-util. `EventCodesExtractor` drives its extraction from that enum, and the Protocol Service
 validates every `codeFilter.path` against it at load, so a path reaches both sides in one change or
 neither. The `resourceType` row above is read by
 [`ResourceTypeDetector`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/ResourceTypeDetector.java),

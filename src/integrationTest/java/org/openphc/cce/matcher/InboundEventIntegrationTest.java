@@ -122,9 +122,9 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
         String patientId = "patient-nomatch-" + UUID.randomUUID();
 
         // Send a Medication resource — no trigger matches this type
-        ObjectNode data = objectMapper.createObjectNode();
-        data.put("resourceType", "Medication");
-        data.put("status", "active");
+        ObjectNode eventData = objectMapper.createObjectNode();
+        eventData.put("resourceType", "Medication");
+        eventData.put("status", "active");
 
         CloudEventMessage event = CloudEventMessage.builder()
                 .id(eventId)
@@ -136,7 +136,7 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
                 .datacontenttype("application/json")
                 .correlationid(UUID.randomUUID().toString())
                 .facilityid("facility-1")
-                .data(data)
+                .data(eventData)
                 .build();
 
         kafkaTemplate.send(inboundTopic, event);
@@ -171,11 +171,11 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
                         .put("system", "http://loinc.org")
                         .put("code", "85354-9")));
 
-        ObjectNode data = objectMapper.createObjectNode();
-        data.put("resourceType", "Observation");
-        data.put("status", "final");
-        data.set("code", codeNode);
-        data.put("subject", patientId);
+        ObjectNode eventData = objectMapper.createObjectNode();
+        eventData.put("resourceType", "Observation");
+        eventData.put("status", "final");
+        eventData.set("code", codeNode);
+        eventData.put("subject", patientId);
 
         CloudEventMessage bpEvent = CloudEventMessage.builder()
                 .id(eventId)
@@ -187,7 +187,7 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
                 .datacontenttype("application/json")
                 .correlationid(UUID.randomUUID().toString())
                 .facilityid("facility-1")
-                .data(data)
+                .data(eventData)
                 .build();
 
         kafkaTemplate.send(inboundTopic, bpEvent);
@@ -210,10 +210,10 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
     }
 
     private CloudEventMessage buildEncounterEvent(String eventId, String patientId, String status) {
-        ObjectNode data = objectMapper.createObjectNode();
-        data.put("resourceType", "Encounter");
-        data.put("status", status);
-        data.put("id", UUID.randomUUID().toString());
+        ObjectNode eventData = objectMapper.createObjectNode();
+        eventData.put("resourceType", "Encounter");
+        eventData.put("status", status);
+        eventData.put("id", UUID.randomUUID().toString());
 
         return CloudEventMessage.builder()
                 .id(eventId)
@@ -225,7 +225,7 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
                 .datacontenttype("application/json")
                 .correlationid(UUID.randomUUID().toString())
                 .facilityid("facility-1")
-                .data(data)
+                .data(eventData)
                 .build();
     }
 }

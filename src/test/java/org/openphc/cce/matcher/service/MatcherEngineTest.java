@@ -45,7 +45,7 @@ class MatcherEngineTest {
 
     @Mock private MatcherEventLogService eventLogService;
     @Mock private ResourceTypeDetector resourceTypeDetector;
-    @Mock private ResourceInfoExtractor resourceInfoExtractor;
+    @Mock private EventCodesExtractor eventCodesExtractor;
     @Mock private TriggerMatchingService triggerMatchingService;
     @Mock private FhirExpressionEvaluator fhirExpressionEvaluator;
     @Mock private ProtocolDefinitionService protocolDefinitionService;
@@ -64,7 +64,7 @@ class MatcherEngineTest {
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
         meterRegistry = new SimpleMeterRegistry();
-        engine = new MatcherEngine(eventLogService, resourceTypeDetector, resourceInfoExtractor,
+        engine = new MatcherEngine(eventLogService, resourceTypeDetector, eventCodesExtractor,
                 triggerMatchingService, fhirExpressionEvaluator,
                 protocolDefinitionService, protocolInstanceService,
                 stepInstanceService, parsedProtocolCache,
@@ -102,7 +102,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(eq(ResourceType.Observation), any())).thenReturn(List.of());
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of());
 
@@ -128,7 +128,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(eq(ResourceType.Observation), any()))
                     .thenReturn(List.of(new MatchedStep(protocolDefId, "bp-check")));
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of());
@@ -164,7 +164,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(eq(ResourceType.Observation), any()))
                     .thenReturn(List.of(new MatchedStep(protocolDefId, "bp-check")));
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of());
@@ -205,7 +205,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Encounter);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(eq(ResourceType.Encounter), any()))
                     .thenReturn(List.of(
                             new MatchedStep(protocolDefId1, "action-a"),
@@ -254,7 +254,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(any(), any())).thenReturn(List.of());
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of(
                     new org.openphc.cce.matcher.service.ConditionOnlyTrigger(
@@ -354,7 +354,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(eq(ResourceType.Observation), any()))
                     .thenReturn(List.of(new MatchedStep(protocolDefId, "follow-up")));
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of());
@@ -387,7 +387,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(eq(ResourceType.Observation), any()))
                     .thenReturn(List.of(new MatchedStep(protocolDefId, "conditional-action")));
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of());
@@ -420,7 +420,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(any(), any())).thenReturn(List.of());
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of(
                     new org.openphc.cce.matcher.service.ConditionOnlyTrigger(
@@ -448,7 +448,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Encounter);
-            when(resourceInfoExtractor.extractCodes(event.getData())).thenReturn(List.of());
+            when(eventCodesExtractor.extractCodes(event.getData())).thenReturn(List.of());
             when(triggerMatchingService.findStructuralMatches(eq(ResourceType.Encounter), any()))
                     .thenReturn(List.of(new MatchedStep(protocolDefId, "first-step")));
             when(triggerMatchingService.getConditionOnlyTriggers()).thenReturn(List.of());

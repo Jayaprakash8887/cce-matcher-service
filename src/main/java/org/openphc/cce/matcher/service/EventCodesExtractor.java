@@ -15,7 +15,7 @@ import java.util.List;
  * same reading, so it lives in cce-common-util rather than here.
  */
 @Component
-public class ResourceInfoExtractor {
+public class EventCodesExtractor {
 
     /**
      * Extract coded values from FHIR resource payloads for Tier 1 structural matching.
@@ -27,22 +27,22 @@ public class ResourceInfoExtractor {
      * silently disabling the action, since matching requires every codeFilter of an action to match. One
      * enum, so a new path reaches both sides in the same change.
      *
-     * @param data the event payload (JsonNode representation of FHIR resource)
+     * @param event the event payload (JsonNode representation of FHIR resource)
      * @return list of CodePathTriple with path, system, and code
      */
-    public List<CodePathTriple> extractCodes(JsonNode data) {
+    public List<CodePathTriple> extractCodes(JsonNode event) {
         List<CodePathTriple> result = new ArrayList<>();
-        if (data == null || data.isNull()) {
+        if (event == null || event.isNull()) {
             return result;
         }
 
         for (TriggerPath triggerPath : TriggerPath.values()) {
             String path = triggerPath.fhirPath();
             switch (triggerPath.shape()) {
-                case CODEABLE_CONCEPT -> extractCodingsFromPath(data, path, result);
-                case CODEABLE_CONCEPT_ARRAY -> extractCodingsFromArrayPath(data, path, result);
-                case IDENTIFIER_ARRAY -> extractIdentifiers(data, path, result);
-                case PLAIN_STRING -> extractStringField(data, path, result);
+                case CODEABLE_CONCEPT -> extractCodingsFromPath(event, path, result);
+                case CODEABLE_CONCEPT_ARRAY -> extractCodingsFromArrayPath(event, path, result);
+                case IDENTIFIER_ARRAY -> extractIdentifiers(event, path, result);
+                case PLAIN_STRING -> extractStringField(event, path, result);
             }
         }
 
@@ -52,8 +52,8 @@ public class ResourceInfoExtractor {
     /**
      * Extract codings from a CodeableConcept field (single object with coding array).
      */
-    private void extractCodingsFromPath(JsonNode data, String path, List<CodePathTriple> result) {
-        JsonNode node = data.get(path);
+    private void extractCodingsFromPath(JsonNode event, String path, List<CodePathTriple> result) {
+        JsonNode node = event.get(path);
         if (node == null) return;
         if (node.isObject()) {
             extractCodingsFromCodeableConcept(path, node, result);
@@ -64,8 +64,8 @@ public class ResourceInfoExtractor {
      * Extract codings from an array of CodeableConcepts (e.g., type[], category[]).
      * Also falls back to single-object handling for resources where the field is 0..1.
      */
-    private void extractCodingsFromArrayPath(JsonNode data, String path, List<CodePathTriple> result) {
-        JsonNode node = data.get(path);
+    private void extractCodingsFromArrayPath(JsonNode event, String path, List<CodePathTriple> result) {
+        JsonNode node = event.get(path);
         if (node == null) return;
         if (node.isArray()) {
             for (JsonNode item : node) {
@@ -91,8 +91,8 @@ public class ResourceInfoExtractor {
         }
     }
 
-    private void extractStringField(JsonNode data, String path, List<CodePathTriple> result) {
-        JsonNode node = data.get(path);
+    private void extractStringField(JsonNode event, String path, List<CodePathTriple> result) {
+        JsonNode node = event.get(path);
         if (node != null && node.isTextual()) {
             result.add(new CodePathTriple(path, "", node.asText()));
         }
@@ -102,8 +102,8 @@ public class ResourceInfoExtractor {
      * Extract identifiers from an Identifier array (e.g., identifier[]).
      * FHIR Identifier has {system, value} — maps to CodePathTriple(path, system, value).
      */
-    private void extractIdentifiers(JsonNode data, String path, List<CodePathTriple> result) {
-        JsonNode node = data.get(path);
+    private void extractIdentifiers(JsonNode event, String path, List<CodePathTriple> result) {
+        JsonNode node = event.get(path);
         if (node == null || !node.isArray()) return;
         for (JsonNode identifier : node) {
             if (!identifier.isObject()) continue;

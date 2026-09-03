@@ -11,14 +11,14 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class ResourceInfoExtractorTest {
+class EventCodesExtractorTest {
 
-    private ResourceInfoExtractor extractor;
+    private EventCodesExtractor extractor;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @BeforeEach
     void setUp() {
-        extractor = new ResourceInfoExtractor();
+        extractor = new EventCodesExtractor();
     }
 
     private JsonNode toJsonNode(Object obj) {
@@ -29,7 +29,7 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_fromCodeCoding() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Observation",
                 "code", Map.of(
                         "coding", List.of(
@@ -37,14 +37,14 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertEquals(1, codes.size());
         assertEquals(new CodePathTriple("code", "http://loinc.org", "85354-9"), codes.get(0));
     }
 
     @Test
     void extractCodes_multipleCodings() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Observation",
                 "code", Map.of(
                         "coding", List.of(
@@ -53,7 +53,7 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertEquals(2, codes.size());
         assertEquals("code", codes.get(0).path());
         assertEquals("code", codes.get(1).path());
@@ -63,7 +63,7 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_fromTypeArray() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Encounter",
                 "type", List.of(
                         Map.of("coding", List.of(
@@ -72,7 +72,7 @@ class ResourceInfoExtractorTest {
                         ))
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertTrue(codes.stream().anyMatch(c ->
                 c.equals(new CodePathTriple("type", "http://openphc.org/encounter-types", "VISIT_ENCOUNTER"))));
     }
@@ -80,7 +80,7 @@ class ResourceInfoExtractorTest {
     @Test
     void extractCodes_fromTypeSingleObject() {
         // Fallback: type as single CodeableConcept (some resource types)
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Encounter",
                 "type", Map.of(
                         "coding", List.of(
@@ -88,7 +88,7 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertTrue(codes.stream().anyMatch(c ->
                 c.equals(new CodePathTriple("type", "http://snomed.info/sct", "11429006"))));
     }
@@ -100,7 +100,7 @@ class ResourceInfoExtractorTest {
         // The reference ANC protocol's enrolment trigger filters on serviceType alongside type, and
         // matching requires every codeFilter of an action to match — so a serviceType this extractor
         // did not read would silently disable that trigger rather than weaken it.
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Encounter",
                 "serviceType", Map.of(
                         "coding", List.of(
@@ -109,7 +109,7 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertTrue(codes.contains(
                 new CodePathTriple("serviceType", "http://openphc.org/service-types", "high-risk-anc")));
     }
@@ -117,7 +117,7 @@ class ResourceInfoExtractorTest {
     @Test
     void extractCodes_typeAndServiceTypeTogether_asTheEnrolmentTriggerNeeds() {
         // Both triples have to come out of one payload, or the AND across codeFilters can never be met.
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Encounter",
                 "type", List.of(Map.of("coding", List.of(
                         Map.of("system", "http://openphc.org/encounter-types", "code", "anc-visit")))),
@@ -125,7 +125,7 @@ class ResourceInfoExtractorTest {
                         Map.of("system", "http://openphc.org/service-types", "code", "high-risk-anc")))
         ));
 
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
 
         assertTrue(codes.contains(
                 new CodePathTriple("type", "http://openphc.org/encounter-types", "anc-visit")));
@@ -137,7 +137,7 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_fromCategoryArrayCoding() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Observation",
                 "category", List.of(
                         Map.of("coding", List.of(
@@ -146,14 +146,14 @@ class ResourceInfoExtractorTest {
                         ))
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertEquals(1, codes.size());
         assertEquals(new CodePathTriple("category", "http://terminology.hl7.org/CodeSystem/observation-category", "vital-signs"), codes.get(0));
     }
 
     @Test
     void extractCodes_multipleCategoryEntries() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Observation",
                 "category", List.of(
                         Map.of("coding", List.of(
@@ -164,7 +164,7 @@ class ResourceInfoExtractorTest {
                         ))
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertEquals(2, codes.size());
     }
 
@@ -172,7 +172,7 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_encounterWithCodeAndType() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Encounter",
                 "code", Map.of(
                         "coding", List.of(
@@ -185,7 +185,7 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertEquals(2, codes.size());
 
         assertTrue(codes.stream().anyMatch(c -> c.path().equals("code")));
@@ -206,7 +206,7 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_missingCode_fallsBackToDisplay() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Observation",
                 "code", Map.of(
                         "coding", List.of(
@@ -214,7 +214,7 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertEquals(1, codes.size());
         assertEquals("code", codes.get(0).path());
         assertEquals("", codes.get(0).system());
@@ -223,18 +223,18 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_noCodingArray_returnsEmptyList() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Observation",
                 "code", Map.of("text", "BP")
         ));
-        assertTrue(extractor.extractCodes(data).stream().noneMatch(c -> c.path().equals("code")));
+        assertTrue(extractor.extractCodes(event).stream().noneMatch(c -> c.path().equals("code")));
     }
 
     // ── extractCodes — clinicalStatus (Condition resource) ──
 
     @Test
     void extractCodes_fromClinicalStatus() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Condition",
                 "clinicalStatus", Map.of(
                         "coding", List.of(
@@ -243,7 +243,7 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertTrue(codes.stream().anyMatch(c ->
                 c.equals(new CodePathTriple("clinicalStatus",
                         "http://terminology.hl7.org/CodeSystem/condition-clinical", "active"))));
@@ -253,11 +253,11 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_fromStringStatus() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Encounter",
                 "status", "in-progress"
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertTrue(codes.stream().anyMatch(c ->
                 c.equals(new CodePathTriple("status", "", "in-progress"))));
     }
@@ -266,7 +266,7 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_codingWithoutSystem() {
-        JsonNode data = toJsonNode(Map.of(
+        JsonNode event = toJsonNode(Map.of(
                 "resourceType", "Procedure",
                 "code", Map.of(
                         "coding", List.of(
@@ -274,7 +274,7 @@ class ResourceInfoExtractorTest {
                         )
                 )
         ));
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
         assertTrue(codes.stream().anyMatch(c ->
                 c.equals(new CodePathTriple("code", "", "some-code"))));
     }
@@ -300,13 +300,13 @@ class ResourceInfoExtractorTest {
         // Identifiers are how a protocol keys on an MRN or a programme enrolment number, so both the
         // namespace and the value have to survive extraction — a value alone could collide across
         // issuing systems.
-        JsonNode data = objectMapper.valueToTree(Map.of(
+        JsonNode event = objectMapper.valueToTree(Map.of(
                 "resourceType", "Patient",
                 "identifier", List.of(
                         Map.of("system", "http://openphc.org/mrn", "value", "260225-0002-5501"),
                         Map.of("system", "http://openphc.org/anc-reg", "value", "ANC-99"))));
 
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
 
         assertTrue(codes.contains(new CodePathTriple("identifier", "http://openphc.org/mrn", "260225-0002-5501")));
         assertTrue(codes.contains(new CodePathTriple("identifier", "http://openphc.org/anc-reg", "ANC-99")));
@@ -314,11 +314,11 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_identifierWithoutASystem_usesAnEmptyNamespace() {
-        JsonNode data = objectMapper.valueToTree(Map.of(
+        JsonNode event = objectMapper.valueToTree(Map.of(
                 "resourceType", "Patient",
                 "identifier", List.of(Map.of("value", "local-42"))));
 
-        assertTrue(extractor.extractCodes(data)
+        assertTrue(extractor.extractCodes(event)
                 .contains(new CodePathTriple("identifier", "", "local-42")));
     }
 
@@ -326,13 +326,13 @@ class ResourceInfoExtractorTest {
     void extractCodes_identifierWithoutAValueIsSkipped() {
         // A system with no value identifies nothing; indexing it would create a triple that can only
         // ever match another value-less payload.
-        JsonNode data = objectMapper.valueToTree(Map.of(
+        JsonNode event = objectMapper.valueToTree(Map.of(
                 "resourceType", "Patient",
                 "identifier", List.of(
                         Map.of("system", "http://openphc.org/mrn"),
                         Map.of("system", "http://openphc.org/mrn", "value", "keeper"))));
 
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
 
         assertEquals(1, codes.stream().filter(c -> "identifier".equals(c.path())).count());
         assertEquals("keeper", codes.stream()
@@ -343,12 +343,12 @@ class ResourceInfoExtractorTest {
     void extractCodes_identifierThatIsNotAnArrayIsIgnored() {
         // FHIR declares identifier as a list. A single object is a malformed payload rather than
         // something to coerce, and must not abort extraction of the rest of the resource.
-        JsonNode data = objectMapper.valueToTree(Map.of(
+        JsonNode event = objectMapper.valueToTree(Map.of(
                 "resourceType", "Patient",
                 "identifier", Map.of("system", "s", "value", "v"),
                 "status", "active"));
 
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
 
         assertTrue(codes.stream().noneMatch(c -> "identifier".equals(c.path())));
         assertTrue(codes.contains(new CodePathTriple("status", "", "active")),
@@ -357,10 +357,10 @@ class ResourceInfoExtractorTest {
 
     @Test
     void extractCodes_identifierEntriesThatAreNotObjectsAreSkipped() throws Exception {
-        JsonNode data = objectMapper.readTree(
+        JsonNode event = objectMapper.readTree(
                 "{\"resourceType\":\"Patient\",\"identifier\":[\"loose-string\",{\"value\":\"kept\"}]}");
 
-        List<CodePathTriple> codes = extractor.extractCodes(data);
+        List<CodePathTriple> codes = extractor.extractCodes(event);
 
         assertEquals(List.of(new CodePathTriple("identifier", "", "kept")),
                 codes.stream().filter(c -> "identifier".equals(c.path())).toList());

@@ -93,9 +93,9 @@ class IntelligencePipelineIntegrationTest extends IntegrationTestBase {
                 .orElseThrow(() -> new AssertionError("intelligence PlanDefinition was not seeded"))
                 .getId();
 
-        ObjectNode data = objectMapper.createObjectNode();
-        data.put("resourceType", "Encounter");
-        data.put("status", "in-progress");
+        ObjectNode eventData = objectMapper.createObjectNode();
+        eventData.put("resourceType", "Encounter");
+        eventData.put("status", "in-progress");
 
         CloudEventMessage event = CloudEventMessage.builder()
                 .id("intel-enroll-" + UUID.randomUUID())
@@ -107,7 +107,7 @@ class IntelligencePipelineIntegrationTest extends IntegrationTestBase {
                 .datacontenttype("application/json")
                 .correlationid(UUID.randomUUID().toString())
                 .facilityid("facility-1")
-                .data(data)
+                .data(eventData)
                 .build();
 
         kafkaTemplate.send(inboundTopic, event);

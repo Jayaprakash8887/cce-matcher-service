@@ -76,11 +76,11 @@ public class FacilityService {
      */
     private FacilityDetails extractFacilityDetails(CloudEventMessage event) {
         String facilityId = event.getFacilityid();
-        JsonNode data = event.getData();
-        if (data == null && (facilityId == null || facilityId.isBlank())) return null;
+        JsonNode eventData = event.getData();
+        if (eventData == null && (facilityId == null || facilityId.isBlank())) return null;
 
         // ServiceRequest: locationReference[0]
-        JsonNode locationRef = data != null ? data.get("locationReference") : null;
+        JsonNode locationRef = eventData != null ? eventData.get("locationReference") : null;
         if (locationRef != null && locationRef.isArray()) {
             for (JsonNode locationRefEntry : locationRef) {
                 FacilityDetails facilityDetails = fromRefNode(locationRefEntry, facilityId);
@@ -89,14 +89,14 @@ public class FacilityService {
         }
 
         // Encounter (transfer): hospitalization.origin takes priority over location[0].location
-        JsonNode hospitalization = data != null ? data.get("hospitalization") : null;
+        JsonNode hospitalization = eventData != null ? eventData.get("hospitalization") : null;
         JsonNode originRef = hospitalization != null ? hospitalization.get("origin") : null;
         if (originRef != null) {
             FacilityDetails facilityDetails = fromRefNode(originRef, facilityId);
             if (facilityDetails != null) return facilityDetails;
         }
 
-        JsonNode locationNode = data != null ? data.get("location") : null;
+        JsonNode locationNode = eventData != null ? eventData.get("location") : null;
         if (locationNode != null) {
             if (locationNode.isArray()) {
                 // Encounter: location[0].location — the fallback for non-transfer encounters
@@ -121,7 +121,7 @@ public class FacilityService {
         // returned from hospitalization.origin or location[0] above; that is deliberate, because the
         // extension cannot distinguish a TRANSFER_ENCOUNTER's origin from its destination. No display
         // name is available at this point.
-        String resolvedId = facilityId != null && !facilityId.isBlank() ? facilityId : extractSourceFacilityExtension(data);
+        String resolvedId = facilityId != null && !facilityId.isBlank() ? facilityId : extractSourceFacilityExtension(eventData);
         return resolvedId != null ? new FacilityDetails(resolvedId, null) : null;
     }
 
@@ -130,8 +130,8 @@ public class FacilityService {
      * (matched by URL suffix so it survives base-URL changes), e.g.:
      * {@code {"url": ".../source-facility", "valueString": "1651"}} → {@code "1651"}.
      */
-    private String extractSourceFacilityExtension(JsonNode data) {
-        JsonNode extensions = data != null ? data.get("extension") : null;
+    private String extractSourceFacilityExtension(JsonNode eventData) {
+        JsonNode extensions = eventData != null ? eventData.get("extension") : null;
         if (extensions == null || !extensions.isArray()) return null;
         for (JsonNode extension : extensions) {
             String url = textOrNull(extension.get("url"));

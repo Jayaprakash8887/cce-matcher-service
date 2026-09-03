@@ -65,7 +65,7 @@ class ActuatorMetricsTest {
 
         MatcherEngine matcherEngine = new MatcherEngine(
                 mock(MatcherEventLogService.class), mock(ResourceTypeDetector.class),
-                mock(ResourceInfoExtractor.class),
+                mock(EventCodesExtractor.class),
                 mock(TriggerMatchingService.class), mock(FhirExpressionEvaluator.class),
                 mock(ProtocolDefinitionService.class), mock(ProtocolInstanceService.class),
                 mock(StepInstanceService.class), mock(ParsedProtocolCache.class),
