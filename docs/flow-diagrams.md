@@ -116,7 +116,7 @@ sequenceDiagram
                     end
 
                     Engine->>StepInst: completeStep(step, eventLogId, source, occurredAt)
-                    Note over StepInst: Single call — internally sets completed_at (clinical time,<br/>clamped to now), detects order violations, runs progressive<br/>instantiation of mandatory dependents (see §9), backfills<br/>unrecorded mandatory predecessors (see §9). Does NOT set<br/>sla_status — timeliness is the Compliance Service's call
+                    Note over StepInst: Single call — internally sets completed_at (clinical time,<br/>clamped to now), detects order violations, runs progressive<br/>instantiation of mandatory dependents (see §9), backfills<br/>unrecorded mandatory predecessors (see §9). Does NOT set<br/>sla_status — timeliness is the Step SLA Service's call
                     StepInst->>DB: UPDATE step_instance SET step_status=COMPLETED,<br/>completed_at, matched_event_id
 
                     Engine->>Intel: evaluateOnCompletion(step, eventPayload)
@@ -198,7 +198,7 @@ per-process, so no leasing is needed.
 ## 3. Time-Driven SLA Transitions (owned elsewhere)
 
 Matcher schedules these but does not apply them. When it creates a step it writes one
-`step_sla_state_transition` row per threshold; the CCE Compliance Service claims a row once its deadline
+`step_sla_state_transition` row per threshold; the CCE Step SLA Service claims a row once its deadline
 has passed — or as soon as the step completes, since `completed_at` then decides the outcome on its own —
 applies the `sla_status` change, and records the `OVERDUE` / `MISSED` deviation. There is no Kafka hop —
 the two services meet on the table, with one writer per column. See
@@ -208,7 +208,7 @@ the two services meet on the table, with one writer per column. See
 sequenceDiagram
     participant Matcher as CCE Matcher Service
     participant DB as PostgreSQL (shared)
-    participant Eval as CCE Compliance Service
+    participant Eval as CCE Step SLA Service
 
     Matcher->>DB: createStep + INSERT step_sla_state_transition (same tx)
     Note over Matcher,DB: One row per threshold present —<br/>a step with no tolerance-days gets no MISSED row
@@ -280,7 +280,7 @@ been written off.
 ## 5. Deviation Detection & Recording
 
 Matcher records exactly one deviation type: `ORDER_VIOLATION`, detected on completion. The time-driven
-`OVERDUE` and `MISSED` deviations are recorded by the CCE Compliance Service (§3), which also owns
+`OVERDUE` and `MISSED` deviations are recorded by the CCE Step SLA Service (§3), which also owns
 intelligence evaluation for them.
 
 > **Intelligence action evaluation** is triggered after the deviation is recorded, and only when it was
@@ -301,7 +301,7 @@ flowchart TD
 
 ## 6. Intelligence Action Evaluation & Trigger Publishing
 
-This flow is triggered after an `ORDER_VIOLATION` is detected or after a step is completed. (`OVERDUE`/`MISSED` deviations are raised by the CCE Compliance Service, which owns intelligence evaluation for them.) The `IntelligenceActionEvaluator` evaluates PlanDefinition intelligence action conditions and publishes intelligence events.
+This flow is triggered after an `ORDER_VIOLATION` is detected or after a step is completed. (`OVERDUE`/`MISSED` deviations are raised by the CCE Step SLA Service, which owns intelligence evaluation for them.) The `IntelligenceActionEvaluator` evaluates PlanDefinition intelligence action conditions and publishes intelligence events.
 
 ```mermaid
 sequenceDiagram

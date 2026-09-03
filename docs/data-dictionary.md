@@ -15,7 +15,7 @@ creates far more tables than it documents here. Creating a table and mapping it 
 the DDL is in `V1__initial_schema.sql`, the column reference is wherever the entity lives.
 
 The history tables moved out in 2.0.0. Their entities now live in cce-common-util, because the
-Compliance Service also appends to `step_instance_history` — recording each `sla_status` transition it
+Step SLA Service also appends to `step_instance_history` — recording each `sla_status` transition it
 applies — so they stopped belonging to this service alone. This service still runs their DDL. See
 [Data Dictionary §12](../../cce-common-util/docs/data-dictionary.md#12-state-transition-history-tables).
 

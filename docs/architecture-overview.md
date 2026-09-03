@@ -12,7 +12,7 @@ graph TB
     subgraph Dependent Services
         INTEL["CCE Intelligence Service"]
         EHR["CCE Collector Service"]
-        COMPLIANCE["CCE Compliance Service"]
+        COMPLIANCE["CCE Step SLA Service"]
         MGMT["CCE Protocol Service"]
     end
 
@@ -59,21 +59,21 @@ graph TB
 (health probes and Prometheus scraping) — there is no application endpoint and therefore no API Gateway
 route to it.
 
-**This service does NOT handle:** event collection/ingestion (CCE Collector Service), time-based SLA transitions and their deviations (CCE Compliance Service), analytics, alerting (CCE Intelligence Service), or protocol and action-definition management (CCE Protocol Service, which owns the `protocol_definition`, `trigger_index` and `action_definition` tables Matcher reads).
+**This service does NOT handle:** event collection/ingestion (CCE Collector Service), time-based SLA transitions and their deviations (CCE Step SLA Service), analytics, alerting (CCE Intelligence Service), or protocol and action-definition management (CCE Protocol Service, which owns the `protocol_definition`, `trigger_index` and `action_definition` tables Matcher reads).
 
 ### 1.1 SLA Transition Evaluation Contract
 
-Time-based `sla_status` transitions are owned by the **CCE Compliance Service**. Matcher's role is to
+Time-based `sla_status` transitions are owned by the **CCE Step SLA Service**. Matcher's role is to
 *schedule* them: when it creates a step it writes one
 [`step_sla_state_transition`](../../cce-common-util/docs/data-dictionary.md#7-step_sla_state_transition)
 row per threshold, in the same transaction, so a step never exists without its schedule.
 
 Everything after that — deciding which rows are due, applying the status change, recording the
-deviation — happens in the Compliance Service. There is **no Kafka hop and no HTTP call** between the
+deviation — happens in the Step SLA Service. There is **no Kafka hop and no HTTP call** between the
 two: they meet on one table in the shared database, with one writer per column.
 
 **The invariant that matters here:** Matcher owns what an inbound event establishes — that the work
-happened, and when — and the Compliance Service owns every judgement of timeliness made from it. The two
+happened, and when — and the Step SLA Service owns every judgement of timeliness made from it. The two
 never write the same column. Concretely, Matcher writes `step_status` and `completed_at` and never
 `sla_status`; it inserts the transition rows and never touches one again. Compliance reads that
 `completed_at` and settles the SLA from it, either when a threshold falls due or on its next sweep after
@@ -86,7 +86,7 @@ The full contract — the two reasons a row is claimable, what the applier does 
 before its deadline, retry and backoff — is documented once, on the side that implements it:
 
 - `cce-common-util` → [Architecture Overview §5](../../cce-common-util/docs/architecture-overview.md#5-sla-transition-contract) — the contract
-- `cce-compliance-service` → [Architecture §3–4](../../cce-compliance-service/docs/architecture-overview.md#3-the-claim-protocol) — the implementation
+- `cce-step-sla-service` → [Architecture §3–4](../../cce-step-sla-service/docs/architecture-overview.md#3-the-claim-protocol) — the implementation
 - Column-by-column ownership: `cce-common-util` → [Data Dictionary §3](../../cce-common-util/docs/data-dictionary.md#3-ownership)
 
 ### 1.2 Intelligence Service Contract
@@ -164,7 +164,7 @@ See [Kafka Events §5.3](kafka-events.md#52-intelligencetriggerevent-outbound--c
 
 The service is one half of a **composite Gradle build**. Shared vocabulary — entities, enums, Kafka
 contracts and the FHIR layer — lives in a sibling repository, `cce-common-util`, so that this service and
-the CCE Compliance Service cannot drift on the tables and messages they both touch.
+the CCE Step SLA Service cannot drift on the tables and messages they both touch.
 
 ```
 cce-matcher-service/                       ← this repo
@@ -534,7 +534,7 @@ When an inbound `Encounter` event arrives:
 ### 6.1 Step Instance
 
 A step carries two statuses that advance **independently**: `step_status` is driven by inbound events
-(this service), `sla_status` by a time threshold being crossed (the Compliance Service). Neither
+(this service), `sla_status` by a time threshold being crossed (the Step SLA Service). Neither
 transition touches the other.
 
 Both state machines, and why the two columns are separate, are in `cce-common-util` →
@@ -554,7 +554,7 @@ What follows is what *this* service does within them.
 `StepInstanceService.backfillMissingMandatorySteps` closes that gap. After every completion, any mandatory step that is a transitive `relatedAction` predecessor of the progress observed so far (`PlanDefinitionParser.computeMustPredecessorSteps`) but that has no `step_instance` row is created with `step_status = NOT_STARTED` and no SLA judgement yet:
 
 - **Scope — predecessors only** — the backfill covers work that is *already late*, never mandatory work still ahead in the chain. Materializing steps still ahead would stamp them with this completion's time and flatten the schedule their own `relatedAction` offsets define (e.g. `lab-results`' `+3d` after `lab-order`), so they are left to progressive instantiation, which creates them on their predecessor's completion with the intended due dates. For example, completing `chief-complaints` does **not** backfill `diagnosis`; a later `treatment` completion does, because `diagnosis` is then a predecessor of observed progress.
-- **Dates** — the scheduled due date is the clinical completion time of the step that revealed the gap. Every backfilled step is a prerequisite that should already have happened, so they are all equally past due and there is no future schedule left to preserve among them. The missed threshold is derived from the step's `tolerance-days` extension. The Compliance Service then drives `sla_status` from null to `OVERDUE` to `MISSED`, so mandatory work that is never recorded surfaces as a `MISSED` deviation. If the event does arrive later, `findActionableStep` picks the row up and completes it — and because Matcher does not judge timeliness, the breach the Compliance Service records still reflects the `completed_at` it finds. A step with no `tolerance-days` gets no missed threshold and therefore never advances past `OVERDUE`.
+- **Dates** — the scheduled due date is the clinical completion time of the step that revealed the gap. Every backfilled step is a prerequisite that should already have happened, so they are all equally past due and there is no future schedule left to preserve among them. The missed threshold is derived from the step's `tolerance-days` extension. The Step SLA Service then drives `sla_status` from null to `OVERDUE` to `MISSED`, so mandatory work that is never recorded surfaces as a `MISSED` deviation. If the event does arrive later, `findActionableStep` picks the row up and completes it — and because Matcher does not judge timeliness, the breach the Step SLA Service records still reflects the `completed_at` it finds. A step with no `tolerance-days` gets no missed threshold and therefore never advances past `OVERDUE`.
 - **Ordering within `completeStep`** — backfill runs *after* `detectOrderViolations`, so a freshly backfilled row is never counted as an incomplete prerequisite for the completion that revealed it; this pass does not invent an `ORDER_VIOLATION`. Subsequent completions do see those rows, so a genuinely out-of-order journey raises `ORDER_VIOLATION` from the next completion onward.
 - **Idempotent** — a mandatory step that already has any row, in any state (pre-existing, terminal, or created earlier in the same transaction by progressive instantiation), is left alone. One row per step (`repeat_index` 0) regardless of `timing.repeat.count`: this is a placeholder for work never recorded, not a scheduled recurrence.
 
@@ -567,7 +567,7 @@ What follows is what *this* service does within them.
 Intelligence actions are modeled as **nested actions** within a PlanDefinition step (`action.action[]`). Each intelligence action defines a condition (JSONLogic/FHIRPath) evaluated against step runtime state, and a `definitionCanonical` pointing to an `ActivityDefinition` (stored in the `action_definition` table) that defines the action to take.
 
 Intelligence action evaluation is triggered on any Step State change. Example:
-1. **On deviation detection** — when an `ORDER_VIOLATION` is detected on completion. (`OVERDUE`/`MISSED` deviations are recorded by the CCE Compliance Service, which owns intelligence evaluation for them.)
+1. **On deviation detection** — when an `ORDER_VIOLATION` is detected on completion. (`OVERDUE`/`MISSED` deviations are recorded by the CCE Step SLA Service, which owns intelligence evaluation for them.)
 2. **On step completion** — when a step is completed by an inbound event (for actions like "notify on late completion")
 
 ```mermaid
@@ -613,7 +613,7 @@ Two contexts are built, one per entry point. JSONLogic rules address them as `ev
 > `step_sla_state_transition.process_by`, not from the step row.
 >
 > `deviationType` never carries `overdue` or `missed` here: those deviations are raised by the SLA
-> CCE Compliance Service, which owns intelligence evaluation for them.
+> CCE Step SLA Service, which owns intelligence evaluation for them.
 
 #### Domain-to-FHIR Concept Mapping
 

@@ -14,7 +14,7 @@ Three sibling repositories share the work. Do not implement their concerns here:
 | Repository | Owns |
 |---|---|
 | `cce-protocol-service` | Loading/retiring definitions, building `trigger_index` |
-| `cce-compliance-service` | Time-driven SLA transitions and the `OVERDUE`/`MISSED` deviations they raise |
+| `cce-step-sla-service` | Time-driven SLA transitions and the `OVERDUE`/`MISSED` deviations they raise |
 | `cce-common-util` | Shared entities, repositories, FHIR parser, `IntelligenceActionEvaluator`, exception handler |
 
 `cce-common-util` is a Gradle **composite build** (`includeBuild '../cce-common-util'`), so it must be
@@ -46,12 +46,12 @@ Documentation is not duplicated between repositories. Start here:
 ## Invariants — breaking these corrupts data
 
 1. **Write `step_status`, never let anything else.** Conversely, only settle `sla_status` at
-   completion; the Compliance Service owns it as deadlines pass. The two services must never write
+   completion; the Step SLA Service owns it as deadlines pass. The two services must never write
    the same column — see `../cce-common-util/docs/data-dictionary.md#3-ownership`.
 2. **Insert `step_sla_state_transition` rows in the same transaction as the step.** A step must never
    exist without its schedule, or its deadlines are invisible forever.
 3. **Never update a transition row after inserting it.** Claim and processing columns belong to the
-   Compliance Service.
+   Step SLA Service.
 4. **`relatedAction` names a step's prerequisite, not its successor**, and both `after-*` and
    `before-*` families occur in real protocols. Getting this backwards inverts every dependency —
    see `../cce-common-util/docs/fhir-conformance.md#1-relatedaction-direction`.
@@ -109,7 +109,7 @@ build: `docker build -f cce-matcher-service/Dockerfile -t cce-matcher-service:2.
 ## Not in scope
 
 - Loading, validating or retiring definitions — `cce-protocol-service`
-- Time-driven SLA transitions and `OVERDUE`/`MISSED` deviations — `cce-compliance-service`
+- Time-driven SLA transitions and `OVERDUE`/`MISSED` deviations — `cce-step-sla-service`
 - Intelligence delivery and routing — the CCE Intelligence Service consumes
   `cce.intelligence.triggers`
 - CQL expression evaluation — only JSONLogic and FHIRPath are supported

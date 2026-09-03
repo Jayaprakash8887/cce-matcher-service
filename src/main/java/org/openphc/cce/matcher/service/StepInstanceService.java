@@ -70,7 +70,7 @@ public class StepInstanceService {
 
     /**
      * Create a new step instance: its event is {@link StepStatus#NOT_STARTED} and its {@code sla_status}
-     * is null — no threshold has fallen due, so there is nothing to judge yet. The Compliance Service
+     * is null — no threshold has fallen due, so there is nothing to judge yet. The Step SLA Service
      * writes that column, never this service.
      *
      * <p>The two thresholds are not stored on the step. They are written as
@@ -86,7 +86,7 @@ public class StepInstanceService {
                 .repeatIndex(repeatIndex)
                 .stepStatus(StepStatus.NOT_STARTED)
                 // sla_status stays null: no threshold has fallen due, so there is nothing to judge
-                // yet. The Compliance Service is the only writer of that column.
+                // yet. The Step SLA Service is the only writer of that column.
                 .requiredBehavior(requiredBehavior)
                 .build();
 
@@ -128,7 +128,7 @@ public class StepInstanceService {
         OffsetDateTime completedAt = (occurredAt != null && !occurredAt.isAfter(now)) ? occurredAt : now;
 
         // Read once, to anchor an after-start dependent to when this step became active. Not used to
-        // settle this step's own SLA: that is the Compliance Service's judgement, made on its next
+        // settle this step's own SLA: that is the Step SLA Service's judgement, made on its next
         // sweep, by comparing the completed_at recorded below against each threshold.
         SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.getThresholds(step.getId());
 

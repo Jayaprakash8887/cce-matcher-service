@@ -53,7 +53,7 @@ System-wide context lives in **cce-common-util** and is not restated here:
 | `relatedAction` direction, status vocabularies, triggers, timing units | `cce-common-util` → [docs/fhir-conformance.md](../cce-common-util/docs/fhir-conformance.md) |
 | The shared entities, parser, cache and evaluator this service uses | `cce-common-util` → [docs/library-reference.md](../cce-common-util/docs/library-reference.md) |
 | Loading and retiring definitions, building the trigger index | `cce-protocol-service` → [docs/](../cce-protocol-service/docs/architecture-overview.md) |
-| Applying SLA transitions once they fall due | `cce-compliance-service` → [docs/](../cce-compliance-service/docs/architecture-overview.md) |
+| Applying SLA transitions once they fall due | `cce-step-sla-service` → [docs/](../cce-step-sla-service/docs/architecture-overview.md) |
 
 Cross-repository links assume the repositories are checked out as siblings, which is also what the
 Gradle composite build assumes.
@@ -86,7 +86,7 @@ Startup + every 60s: ProtocolDefinitionService.refreshProtocolCaches()
 **Owned elsewhere.** Protocol and action-definition management (writes to `protocol_definition`,
 `trigger_index`, `action_definition`) belongs to the CCE Protocol Service.
 
-`step_instance.sla_status` belongs entirely to the **CCE Compliance Service**, which claims the
+`step_instance.sla_status` belongs entirely to the **CCE Step SLA Service**, which claims the
 `step_sla_state_transition` rows this service writes. This service records *that* a step completed and
 *when* (`completed_at`, from the clinical occurrence time) and never judges whether that was timely —
 so a freshly completed step's `sla_status` is null until Compliance's next sweep, which compares the

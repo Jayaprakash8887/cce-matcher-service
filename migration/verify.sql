@@ -88,7 +88,7 @@ WHERE step_status IS NULL
 SELECT t.transition_type, t.is_processed, count(*) AS rows
 FROM step_sla_state_transition t GROUP BY 1,2 ORDER BY 1,2;
 
-\echo '── 8. Work the Compliance Service will pick up on its first sweep'
+\echo '── 8. Work the Step SLA Service will pick up on its first sweep'
 \echo '   These are steps whose deadline has passed and whose transition was not already applied.'
 \echo '   Expect a burst of OVERDUE deviations for steps that sat in the old DUE state.'
 SELECT count(*) AS pending_transitions_now_due
