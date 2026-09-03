@@ -64,7 +64,7 @@ them and re-run.
 ### The SLA schedule backfill
 
 Each step with a deadline gets its `step_sla_state_transition` rows. A transition whose effect the old
-system already applied is inserted **already processed** — leaving it pending would make the Compliance
+system already applied is inserted **already processed** — leaving it pending would make the Step SLA
 Service re-apply it and record a deviation the monolith's scheduler had already recorded.
 
 | Step after mapping | `DUE_DATE_REACHED` | `MISSED_DATE_REACHED` |

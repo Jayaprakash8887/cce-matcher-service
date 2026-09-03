@@ -157,6 +157,12 @@ pre-split monolith:
 | `V1__initial_schema.sql` | Creates the whole 2.0.0 schema | **Skipped** — recorded as already applied |
 | `V2__upgrade_from_monolith_schema.sql` | No-op — every block is guarded on the presence of the 1.x shape | Performs the transformation (splits `state` into `step_status`/`sla_status`, moves the deadlines into `step_sla_state_transition`, renames `compliance_event_log`) |
 
+> **A stale name in the migration comments.** Both files describe the writer of `sla_status` as the
+> Compliance Service; that service is now `cce-step-sla-service`. The comments are left as they are
+> because the migrations are applied, and editing one changes its Flyway checksum — a comment-only
+> edit would fail validation on every database that already ran it. `migration/verify.sql`, which
+> Flyway does not manage, uses the current name.
+
 **New database:** leave `CCE_FLYWAY_BASELINE_VERSION` at `0`. V1 builds the schema, V2 finds nothing to
 change.
 
