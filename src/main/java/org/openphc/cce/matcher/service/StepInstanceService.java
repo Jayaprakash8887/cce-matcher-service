@@ -35,15 +35,6 @@ public class StepInstanceService {
 
     private static final Logger log = LoggerFactory.getLogger(StepInstanceService.class);
 
-    /**
-     * SLA statuses that can still move: a null status (no threshold judged yet) and {@link
-     * SlaStatus#OVERDUE}. {@link SlaStatus#MET} and {@link SlaStatus#MISSED} are settled outcomes with
-     * no threshold left to cross.
-     */
-    private static boolean isLiveSlaStatus(SlaStatus slaStatus) {
-        return slaStatus == null || slaStatus == SlaStatus.OVERDUE;
-    }
-
     private final StepInstanceRepository stepInstanceRepository;
     private final ParsedProtocolCache parsedProtocolCache;
     private final DeviationRecorder deviationRecorder;
@@ -66,6 +57,15 @@ public class StepInstanceService {
         this.stateTransitionHistoryWriter = stateTransitionHistoryWriter;
         this.slaScheduleService = slaScheduleService;
         this.slaThresholdReader = slaThresholdReader;
+    }
+
+    /**
+     * SLA statuses that can still move: a null status (no threshold judged yet) and {@link
+     * SlaStatus#OVERDUE}. {@link SlaStatus#MET} and {@link SlaStatus#MISSED} are settled outcomes with
+     * no threshold left to cross.
+     */
+    private static boolean isLiveSlaStatus(SlaStatus slaStatus) {
+        return slaStatus == null || slaStatus == SlaStatus.OVERDUE;
     }
 
     /**
