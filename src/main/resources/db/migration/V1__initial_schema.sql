@@ -7,7 +7,7 @@
 -- Owns the runtime plane: protocol instances, steps and their SLA schedule, the inbound-event
 -- idempotency log, facilities, and the append-only status history. Also creates `deviation`, whose
 -- foreign key points into `step_instance`, and `intelligence_event_log`, which carries no foreign
--- keys — the Compliance Service writes rows in both but owns no DDL.
+-- keys — the Step SLA Service writes rows in both but owns no DDL.
 --
 -- Depends on the Protocol Service having migrated first: `protocol_instance.protocol_definition_id`
 -- references `protocol_definition`, which that service creates. Deployment order is
@@ -93,7 +93,7 @@ ALTER TABLE matcher_event_log REPLICA IDENTITY FULL;
 -- judgement, and it is also the resting state of a step that has no SLA at all (no due date means
 -- no step_sla_state_transition rows, so nothing will ever judge it).
 --
--- The Compliance Service is its ONLY writer, and it judges from completed_at against the thresholds:
+-- The Step SLA Service is its ONLY writer, and it judges from completed_at against the thresholds:
 -- completed before the due date is MET, at or after it OVERDUE, at or after the missed date (= due
 -- date + tolerance-days) MISSED for a 'must' step. A completed step is settled on the next sweep,
 -- since completed_at fixes the answer; one still outstanding is judged when each threshold falls due.
@@ -112,9 +112,26 @@ CREATE TABLE step_instance (
     repeat_index            INTEGER         NOT NULL DEFAULT 0,
     step_status             VARCHAR         NOT NULL,
     -- Nullable: null means no threshold has fallen due, so timeliness is not yet judged.
-    -- Written only by the Compliance Service. Stays null for a step with no SLA at all.
+    -- Written only by the Step SLA Service. Stays null for a step with no SLA at all.
     sla_status              VARCHAR,
-    -- SLA thresholds are not denormalized here; each is a step_sla_state_transition row (see §4).
+    -- The deadline the work was expected to be recorded by, as the protocol definition sets it.
+    -- Written once by the Matcher Service when it creates the step and never updated: it is what MET
+    -- is judged against, so moving it would redate every verdict already reached. OVERDUE and MISSED
+    -- are not asked of it — a breach is decided by the process_by of the row that detects it (§4).
+    --
+    -- The step's DUE_DATE_REACHED row (§4) carries the same instant in process_by, and the two are not
+    -- the same thing. That row schedules when the sweep looks at this step — it is fetched FOR UPDATE
+    -- SKIP LOCKED, deferred through next_attempt_at on failure, marked processed, counted as backlog.
+    -- This column says what the step was due by. Holding them apart is what stops a change to the
+    -- sweep's scheduling from changing what "on time" means, and is why process_by needed a separate
+    -- next_attempt_at beside it in the first place.
+    --
+    -- Nullable: a step created from its own trigger has no deadline, and stays null here and in
+    -- sla_status. The missed date is not stored here — it is the process_by of the
+    -- MISSED_DATE_REACHED row, which is both that verdict's schedule and its threshold, so it carries
+    -- no second meaning to separate out. Unindexed: nothing queries by it, the Step SLA Service reads
+    -- it per step having already fetched the row.
+    due_date                TIMESTAMPTZ,
     completed_at            TIMESTAMPTZ,
     completed_by_source     VARCHAR,
     matched_event_id        UUID,
@@ -143,7 +160,7 @@ CREATE INDEX idx_step_instance_protocol ON step_instance (protocol_instance_id);
 -- Locating the step a late-arriving event should complete.
 CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_id, action_id)
     WHERE step_status = 'NOT_STARTED';
--- The Compliance Service's second claim path: a step that has been completed can have its SLA settled
+-- The Step SLA Service's second claim path: a step that has been completed can have its SLA settled
 -- from completed_at at once, without waiting for a threshold to fall due. This is the set it selects —
 -- completed but not yet settled — which stays small because a claim empties it. Keeping it a partial
 -- index is the point: the alternative is scanning every step's pending schedule on each sweep.
@@ -287,7 +304,7 @@ CREATE TABLE intelligence_event_log (
     CONSTRAINT intelligence_event_log_pkey PRIMARY KEY (id)
 );
 
--- The three filters the Compliance Service's API exposes, and nothing else: there is no index on
+-- The three filters the Step SLA Service's API exposes, and nothing else: there is no index on
 -- subject or step_instance_id, because no query has ever selected on either.
 CREATE INDEX idx_intelligence_event_log_action_definition ON intelligence_event_log (action_definition_id);
 CREATE INDEX idx_intelligence_event_log_protocol_instance ON intelligence_event_log (protocol_instance_id);
@@ -340,7 +357,7 @@ CREATE TABLE step_instance_history (
     step_instance_id        UUID            NOT NULL,
     step_status             VARCHAR         NOT NULL,
     -- Nullable: null means no threshold has fallen due, so timeliness is not yet judged.
-    -- Written only by the Compliance Service. Stays null for a step with no SLA at all.
+    -- Written only by the Step SLA Service. Stays null for a step with no SLA at all.
     sla_status              VARCHAR,
     changed_at              TIMESTAMPTZ     NOT NULL DEFAULT now(),
 

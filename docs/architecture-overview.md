@@ -75,7 +75,7 @@ two: they meet on one table in the shared database, with one writer per column.
 **The invariant that matters here:** Matcher owns what an inbound event establishes — that the work
 happened, and when — and the Step SLA Service owns every judgement of timeliness made from it. The two
 never write the same column. Concretely, Matcher writes `step_status` and `completed_at` and never
-`sla_status`; it inserts the transition rows and never touches one again. Compliance reads that
+`sla_status`; it inserts the transition rows and never touches one again. Step SLA reads that
 `completed_at` and settles the SLA from it, either when a threshold falls due or on its next sweep after
 a completion.
 
@@ -189,7 +189,7 @@ That inventory is not restated here — see
 package-by-package reference, and
 [data-dictionary.md](../../cce-common-util/docs/data-dictionary.md) for the nine shared tables.
 
-`SlaThresholdReader` is worth singling out: Matcher *writes* a step's SLA schedule and Compliance *reads*
+`SlaThresholdReader` is worth singling out: Matcher *writes* a step's SLA schedule and Step SLA *reads*
 it, so how those rows are interpreted is shared code rather than duplicated on both sides.
 
 ### 3.2 What stays here (`org.openphc.cce.matcher`)

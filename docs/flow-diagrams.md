@@ -495,7 +495,7 @@ flowchart TD
     LOOP --> DATES["due = completedStep.completed_at (clinical time)<br/>missed = due + tolerance-days (no row if unset)<br/>written as step_sla_state_transition rows"]
     DATES --> CREATE["createStep(stepId, repeatIndex 0) — sla NULL"]
     CREATE --> LOOP
-    LOOP -->|"Done"| DONE2["Their transition rows now exist, so Compliance drives<br/>sla NULL → OVERDUE → MISSED (deviation), judging any<br/>late completion against the completed_at Matcher recorded"]
+    LOOP -->|"Done"| DONE2["Their transition rows now exist, so Step SLA drives<br/>sla NULL → OVERDUE → MISSED (deviation), judging any<br/>late completion against the completed_at Matcher recorded"]
 ```
 
 > Steps still **ahead** in the chain are deliberately excluded — backfilling them would stamp them with this completion's time and flatten the schedule their own `relatedAction` offsets define. They are left to progressive instantiation.

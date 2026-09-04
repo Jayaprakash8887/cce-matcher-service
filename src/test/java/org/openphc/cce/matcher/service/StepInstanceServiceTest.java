@@ -144,7 +144,7 @@ class StepInstanceServiceTest {
             // Matcher records that the work happened and when; whether that was timely is the
             // Step SLA Service's judgement, made when the due date falls and compared against
             // the completed_at recorded here. Writing MET here would be a second writer on the column.
-            assertNull(step.getSlaStatus(), "sla_status is Compliance's to write, not Matcher's");
+            assertNull(step.getSlaStatus(), "sla_status is Step SLA's to write, not Matcher's");
             assertNotNull(step.getCompletedAt());
             assertEquals(eventId, step.getMatchedEventId());
             assertEquals("test-source", step.getCompletedBySource());

@@ -20,9 +20,11 @@
 --   * step_instance.state splits into step_status (did the work happen?) and sla_status (was it on
 --     time?). The two were conflated, which made "completed, but late" unrepresentable.
 --   * completion_status is dropped: EARLY/ON_TIME/LATE is derivable from the pair.
---   * due_date / overdue_date / missed_date leave step_instance. Deadlines now live as rows in
---     step_sla_state_transition, one per threshold, which is also the handoff to the Compliance
---     Service.
+--   * overdue_date / missed_date leave step_instance. Those thresholds now live as rows in
+--     step_sla_state_transition, one per threshold, which is also the handoff to the Step SLA
+--     Service. due_date stays: a step keeps its own deadline, which is what a timeliness verdict is
+--     measured against, and the DUE_DATE_REACHED row it also seeds schedules the sweep rather than
+--     defining what the step was due by.
 --   * compliance_event_log becomes matcher_event_log, following the service that owns it.
 --   * step_instance.completed_by_event_id becomes matched_event_id, and gains the foreign key and
 --     partial index V1 declares on it — 1.x had neither.
@@ -138,7 +140,7 @@ BEGIN
     UPDATE step_instance
     SET sla_status = CASE
         -- DUE and PENDING always meant the same thing, and both are now the absence of a
-        -- judgement: NULL. The Compliance Service writes a status when a threshold falls due.
+        -- judgement: NULL. The Step SLA Service writes a status when a threshold falls due.
         WHEN state IN ('PENDING', 'DUE')  THEN NULL
         WHEN state = 'OVERDUE'            THEN 'OVERDUE'
         WHEN state = 'MISSED'             THEN 'MISSED'
@@ -199,7 +201,7 @@ BEGIN
     END IF;
 
     -- One row per threshold that exists. A transition whose effect the old system already applied is
-    -- inserted already-processed: leaving it pending would make the Compliance Service re-apply it and
+    -- inserted already-processed: leaving it pending would make the Step SLA Service re-apply it and
     -- record a deviation the monolith's scheduler had recorded once already.
     --
     -- process_by is the deadline itself, so the row remains the audit truth of when it fell due, and
@@ -248,7 +250,7 @@ BEGIN
         DROP INDEX IF EXISTS idx_step_instance_state;
         DROP INDEX IF EXISTS idx_step_instance_due_date;
         -- The scheduler service's partial indexes, if it ever ran against this database. It is
-        -- retired by this release: its work is now step_sla_state_transition plus the Compliance
+        -- retired by this release: its work is now step_sla_state_transition plus the Step SLA
         -- Service's sweep.
         DROP INDEX IF EXISTS idx_step_instance_due_overdue;
         DROP INDEX IF EXISTS idx_step_instance_overdue_missed;
@@ -259,7 +261,10 @@ BEGIN
 
         ALTER TABLE step_instance DROP COLUMN state;
         ALTER TABLE step_instance DROP COLUMN completion_status;
-        ALTER TABLE step_instance DROP COLUMN due_date;
+        -- due_date is deliberately not dropped: V1 declares it, and the 1.x row already holds the
+        -- right value. The DUE_DATE_REACHED rows seeded above take their process_by from this same
+        -- column, so the upgraded database ends with the deadline in both places, exactly as a
+        -- greenfield one does.
         ALTER TABLE step_instance DROP COLUMN overdue_date;
         ALTER TABLE step_instance DROP COLUMN missed_date;
 
@@ -465,7 +470,7 @@ DROP INDEX IF EXISTS idx_step_instance_completed_by_event_id;
 DROP INDEX IF EXISTS idx_step_instance_completed_event;
 DROP INDEX IF EXISTS idx_step_instance_matched_event;
 
--- The Compliance Service claims a completed step's transitions from this index rather than waiting for
+-- The Step SLA Service claims a completed step's transitions from this index rather than waiting for
 -- their deadlines (V1 §3). 1.x had no equivalent — it had no such claim path — so it is created here.
 CREATE INDEX IF NOT EXISTS idx_step_instance_completed_unjudged
     ON step_instance (id)

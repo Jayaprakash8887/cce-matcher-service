@@ -73,9 +73,11 @@ public class StepInstanceService {
      * is null — no threshold has fallen due, so there is nothing to judge yet. The Step SLA Service
      * writes that column, never this service.
      *
-     * <p>The two thresholds are not stored on the step. They are written as
-     * {@code step_sla_state_transition} rows in this same transaction, so the step and its SLA schedule
-     * commit or roll back together.
+     * <p>The due date is recorded on the step: it is the deadline the work was expected by, and what
+     * the Step SLA Service measures {@code completed_at} against. The missed date is not, being readable
+     * from the {@code MISSED_DATE_REACHED} row that already carries it as both schedule and threshold.
+     * Either way the {@code step_sla_state_transition} rows are written in this same transaction, so the
+     * step and its SLA schedule commit or roll back together.
      */
     public StepInstance createStep(ProtocolInstance protocolInstance, String actionId,
                                    int repeatIndex, OffsetDateTime dueDate,
@@ -87,6 +89,11 @@ public class StepInstanceService {
                 .stepStatus(StepStatus.NOT_STARTED)
                 // sla_status stays null: no threshold has fallen due, so there is nothing to judge
                 // yet. The Step SLA Service is the only writer of that column.
+                //
+                // due_date is written here and never again. It is what that service settles MET
+                // against, so it has to be fixed before anything can be judged, and moving it later
+                // would redate every verdict already reached.
+                .dueDate(dueDate)
                 .requiredBehavior(requiredBehavior)
                 .build();
 
@@ -146,7 +153,7 @@ public class StepInstanceService {
         stateTransitionHistoryWriter.recordStepInstanceTransition(step, now);
 
 
-        log.info("Completed step: stepId={}, actionId={}, completedAt={} (SLA judged by Compliance)",
+        log.info("Completed step: stepId={}, actionId={}, completedAt={} (SLA judged by the Step SLA Service)",
                 step.getId(), step.getActionId(), completedAt);
 
         // The flattened steps and the normalized relatedAction graph — all three passes below
@@ -496,15 +503,4 @@ public class StepInstanceService {
         };
     }
 
-    /**
-     * Settle a step's SLA at the moment its event arrives.
-     *
-     * <p>{@link SlaStatus#MET} only when the event beat {@code dueDate}. Otherwise the SLA keeps
-     * whatever it had already reached — {@code OVERDUE} past the due date, {@code MISSED} past the
-     * missed date — so the row states plainly that the work was done, and done late.
-     *
-     * <p>Derived from {@code completedAt} rather than read off the row, because the event carries a
-     * clinical occurrence time that may precede the scheduler's last sweep: an act that happened
-     * before the due date but was reported after it is MET, not OVERDUE.
-     */
 }

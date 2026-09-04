@@ -57,7 +57,7 @@ class StepSlaScheduleServiceTest {
             assertEquals(step.getId(), toOverdue.getStepInstanceId());
             assertEquals(due, toOverdue.getProcessBy());
             // The row names the deadline, not a from/to pair: what crossing it means for the step is
-            // decided when Compliance applies it, and read back from step_instance.sla_status.
+            // decided when Step SLA applies it, and read back from step_instance.sla_status.
             assertEquals(SlaStatus.OVERDUE, SlaTransitionType.DUE_DATE_REACHED.breachStatus());
 
             StepSlaStateTransition toMissed = rows.get(SlaTransitionType.MISSED_DATE_REACHED);
