@@ -160,16 +160,20 @@ CREATE INDEX idx_step_instance_protocol ON step_instance (protocol_instance_id);
 -- Locating the step a late-arriving event should complete.
 CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_id, action_id)
     WHERE step_status = 'NOT_STARTED';
--- The Step SLA Service's second claim path: a step that has been completed can have its SLA settled
--- from completed_at at once, without waiting for a threshold to fall due. This is the set it selects —
--- completed but not yet settled — which stays small because a claim empties it. Keeping it a partial
--- index is the point: the alternative is scanning every step's pending schedule on each sweep.
+-- Completed steps whose SLA is still unsettled, which the Step SLA Service reads two ways. The null
+-- half is its on-time sweep: a step whose completed_at beat its due_date is recorded MET from here
+-- directly, with no transition row involved. The OVERDUE half is its second fetch path: a step already
+-- judged late, whose remaining missed-date row can be taken ahead of that date.
+--
+-- Either way the set stays small, because both consumers empty it — MET and MISSED are settled statuses
+-- and leave the predicate. Keeping it a partial index is the point: the alternative is scanning every
+-- step's pending schedule on each sweep.
 CREATE INDEX idx_step_instance_completed_unjudged ON step_instance (id)
     WHERE step_status = 'COMPLETED'
       AND completed_at IS NOT NULL
       AND (sla_status IS NULL OR sla_status = 'OVERDUE');
--- And deliberately none on sla_status alone. Nothing selects steps by it: due work comes from
--- step_sla_state_transition (§4), and the one query that reads sla_status also filters on step_status
+-- And deliberately none on sla_status alone. Nothing selects steps by it alone: due work comes from
+-- step_sla_state_transition (§4), and every query that reads sla_status also filters on step_status
 -- and completed_at, so the partial index above serves it and serves it more precisely.
 
 ALTER TABLE step_instance REPLICA IDENTITY FULL;
