@@ -470,13 +470,18 @@ DROP INDEX IF EXISTS idx_step_instance_completed_by_event_id;
 DROP INDEX IF EXISTS idx_step_instance_completed_event;
 DROP INDEX IF EXISTS idx_step_instance_matched_event;
 
--- The Step SLA Service claims a completed step's transitions from this index rather than waiting for
--- their deadlines (V1 §3). 1.x had no equivalent — it had no such claim path — so it is created here.
-CREATE INDEX IF NOT EXISTS idx_step_instance_completed_unjudged
+-- The Step SLA Service's on-time sweep reads this index to record MET for work that beat its due_date,
+-- without waiting for a deadline (V1 §3). 1.x had no equivalent — it judged no SLA from the step — so
+-- it is created here. Dropped first: an earlier build of this release created it over a wider
+-- predicate that also admitted sla_status = 'OVERDUE', which never drained.
+DROP INDEX IF EXISTS idx_step_instance_completed_unjudged;
+CREATE INDEX idx_step_instance_completed_unjudged
     ON step_instance (id)
     WHERE step_status = 'COMPLETED'
       AND completed_at IS NOT NULL
-      AND (sla_status IS NULL OR sla_status = 'OVERDUE');
+      AND sla_status IS NULL
+      AND due_date IS NOT NULL
+      AND completed_at < due_date;
 
 -- ── 9. audit_log ─────────────────────────────────────────────────────────────
 -- Dropped in 2.0.0. The append-only history tables carry state transitions, and actor attribution is

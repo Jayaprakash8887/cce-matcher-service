@@ -160,18 +160,23 @@ CREATE INDEX idx_step_instance_protocol ON step_instance (protocol_instance_id);
 -- Locating the step a late-arriving event should complete.
 CREATE INDEX idx_step_instance_not_started ON step_instance (protocol_instance_id, action_id)
     WHERE step_status = 'NOT_STARTED';
--- Completed steps whose SLA is still unsettled, which the Step SLA Service reads two ways. The null
--- half is its on-time sweep: a step whose completed_at beat its due_date is recorded MET from here
--- directly, with no transition row involved. The OVERDUE half is its second fetch path: a step already
--- judged late, whose remaining missed-date row can be taken ahead of that date.
+-- Completed steps that beat their due_date and have not been told so. The Step SLA Service's on-time
+-- sweep reads exactly this set and records MET from here directly, with no transition row involved.
 --
--- Either way the set stays small, because both consumers empty it — MET and MISSED are settled statuses
--- and leave the predicate. Keeping it a partial index is the point: the alternative is scanning every
--- step's pending schedule on each sweep.
+-- The predicate is the sweep's own, which is what keeps the set transient: writing MET takes a step out
+-- of it, so a sweep empties what has accumulated. It deliberately does not admit sla_status = 'OVERDUE'
+-- as well. That was here for a second fetch path, which took an already-late step's remaining
+-- missed-date row ahead of that date; the path is gone — it changed no verdict and it re-fetched rows
+-- the back-off had deferred — and those rows never left the predicate in any case, since OVERDUE is
+-- terminal for a step completed before its missed date. Nor does it admit a null sla_status alone: a
+-- completed step with no due_date is never MET, so it would sit here forever. Both would grow the index
+-- without bound. Keeping it partial is the point — the alternative is scanning every step on each sweep.
 CREATE INDEX idx_step_instance_completed_unjudged ON step_instance (id)
     WHERE step_status = 'COMPLETED'
       AND completed_at IS NOT NULL
-      AND (sla_status IS NULL OR sla_status = 'OVERDUE');
+      AND sla_status IS NULL
+      AND due_date IS NOT NULL
+      AND completed_at < due_date;
 -- And deliberately none on sla_status alone. Nothing selects steps by it alone: due work comes from
 -- step_sla_state_transition (§4), and every query that reads sla_status also filters on step_status
 -- and completed_at, so the partial index above serves it and serves it more precisely.
@@ -201,15 +206,16 @@ ALTER TABLE step_instance REPLICA IDENTITY FULL;
 --
 -- A step usually completes before its row is processed, and that is the point: the evaluator compares
 -- step_instance.completed_at against process_by rather than consulting the wall clock. Completed at or
--- after process_by breached that deadline; completed before it did not. Only the due-date row can settle
--- an SLA as MET — beating the missed date merely means the step was not written off, and a step
--- completed between its two thresholds stays the OVERDUE the due-date row made it.
+-- after process_by breached that deadline; completed before it did not. What a row decides is a breach
+-- and only a breach: no row writes MET. Beating the missed date merely means the step was not written
+-- off, and a step completed between its two thresholds stays the OVERDUE the due-date row made it.
 --
--- Because that comparison never consults the clock, a row whose step is already COMPLETED can be applied
--- at once: completed_at is fixed and the thresholds were written at creation, so the deadline arriving
--- would only confirm what is already decided. So a row becomes claimable when next_attempt_at passes OR
--- when its step completes — the second path is why an early completion does not sit at a null sla_status
--- until its due date, and it is what idx_step_instance_completed_unjudged (§3) exists to serve.
+-- A row is fetched when next_attempt_at passes, and for no other reason. Nothing pulls a step's
+-- remaining rows forward because the step completed: the verdict is a function of process_by and the
+-- step's own columns, none of which move while the row is pending, so applying a row early reaches the
+-- outcome its deadline reaches anyway. What does not wait for a schedule is MET — timeliness is a
+-- statement about the step, settled from step_instance.due_date by a sweep of the steps themselves,
+-- which is what idx_step_instance_completed_unjudged (§3) exists to serve.
 -- =============================================
 CREATE TABLE step_sla_state_transition (
     id                  UUID            NOT NULL,
