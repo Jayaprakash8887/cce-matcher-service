@@ -300,6 +300,23 @@ kafka-topics.sh --create --topic cce.events.inbound.dlq \
 - **Isolation level:** `read_committed`
 - **Max poll records:** 200 (prod)
 
+### Event Replay
+
+**Before replaying events onto `cce.events.inbound`, stop `cce-step-sla-service`.** Bring it back only once this service has drained the backlog. **Event Replay** is the term for any such run — events re-published after a fix, a historical backfill during migration, or a long outage that left this consumer group far behind.
+
+The SLA service decides a step is overdue by finding no completion recorded on it, which is only sound once every event that could have completed it has been matched here. While a backlog is outstanding it reads not-yet-matched as not-done, and records `OVERDUE` / `MISSED` deviations against steps whose completing event is still queued. Those verdicts, and the clinician alerts they trigger, cannot be withdrawn. Replaying historical events makes this the default rather than a risk: SLA thresholds are anchored to *clinical* time, so a step created from a month-old event is scheduled with its deadline already in the past and is judged within seconds.
+
+**Nothing in this service needs stopping or special handling for a replay** — it is the SLA service that must wait. To confirm this service is caught up before that one is restarted:
+
+```bash
+kafka-consumer-groups.sh --bootstrap-server kafka:9092 \
+  --group cce-matcher-service --describe
+```
+
+`LAG 0` on every partition means the database writes for those events are committed, not merely that the records were read — this service commits offsets only after a record is processed (`enable-auto-commit: false`). Wait a few minutes at zero before restarting the SLA service; a late burst is easy to miss.
+
+The full runbook, and what to do if the sequence was missed, is in the `cce-step-sla-service` repository's deployment guide.
+
 ### Error Handling
 
 Failed messages are retried with `FixedBackOff` (5 attempts × 2s interval in prod), then routed to the corresponding `.dlq` topic. Monitor DLQ topics for persistent failures.
@@ -412,6 +429,7 @@ psql -U cce_user -h postgres-host -p 5433 ccedb < backup_20250101.sql
 | No events processed | Kafka unreachable | Check `KAFKA_BOOTSTRAP_SERVERS`, broker health |
 | Events going to DLQ | Deserialization errors | Check message format matches CloudEvents schema |
 | High consumer lag | Slow processing | Increase `KAFKA_CONCURRENCY`, check DB performance |
+| Spurious `OVERDUE` / `MISSED` deviations after a backlog was processed | `cce-step-sla-service` was left running while this service still had events to match, so it judged steps whose completing event was still queued | Not self-correcting. See [Event Replay](#event-replay) — stop the SLA service for the duration next time |
 | Connection pool exhaustion | Too many concurrent requests | Increase `DB_POOL_SIZE` |
 
 ### Log Configuration
