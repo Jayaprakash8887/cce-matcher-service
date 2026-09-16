@@ -75,9 +75,9 @@ two: they meet on one table in the shared database, with one writer per column.
 **The invariant that matters here:** Matcher owns what an inbound event establishes — that the work
 happened, and when — and the Step SLA Service owns every judgement of timeliness made from it. The two
 never write the same column. Concretely, Matcher writes `step_status` and `completed_at` and never
-`sla_status`; it inserts the transition rows and never touches one again. Step SLA reads that
-`completed_at` and settles the SLA from it, either when a threshold falls due or on its next sweep after
-a completion.
+`sla_status`; it inserts the transition rows — the two deadlines at creation, and a
+`MET_CONDITION_REACHED` at a completion that beat the due date — and never touches one again. Step SLA
+reads that `completed_at` and settles the SLA from it when each row comes round.
 
 `ORDER_VIOLATION` deviations stay in this service, because they are detected from the event itself at
 completion rather than from a deadline passing.

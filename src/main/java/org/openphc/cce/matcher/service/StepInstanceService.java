@@ -204,8 +204,8 @@ public class StepInstanceService {
 
     /**
      * Whether a step is still genuinely outstanding: its event has not arrived and its SLA can
-     * still move. Excludes SLAs already settled — MISSED (written off) and MET (an optional step
-     * closed out).
+     * still move. Excludes SLAs already settled — {@code MISSED}, written off, and {@code MET},
+     * recorded on time. {@code OVERDUE} is not settled: a late event can still complete such a step.
      */
     private boolean isOutstandingStep(StepInstance step) {
         return step.getStepStatus() == StepStatus.NOT_STARTED && isLiveSlaStatus(step.getSlaStatus());
@@ -214,7 +214,7 @@ public class StepInstanceService {
     /**
      * Detect order violations: when a step completes, check whether any of its mandatory
      * ({@code requiredBehavior="must"}) immediate predecessors is still outstanding (see
-     * {@link #isOutstanding}). The immediate predecessors of step X are the prerequisites the
+     * {@link #isOutstandingStep}). The immediate predecessors of step X are the prerequisites the
      * normalized dependency graph records for it (see
      * {@link PlanDefinitionParser#buildDependencyGraph}).
      */

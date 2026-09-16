@@ -243,6 +243,8 @@ Flyway manages all schema migrations automatically on application startup.
 - Migrations are located at `classpath:db/migration`
 - Migration history is tracked in a namespaced Flyway table, `flyway_schema_history_matcher` (not the default `flyway_schema_history`), so it does not collide with other CCE services' migration history in the shared `ccedb` database
 - `V1__initial_schema.sql` creates all 12 tables with their indexes and constraints
+- `V2__upgrade_from_monolith_schema.sql` transforms a 1.x `ccedb` into that shape, and is a no-op on a new one
+- `V3__met_condition_reached.sql` and `V4__optional_steps_have_no_schedule.sql` follow the SLA rules of this release: `MET` becomes a scheduled row, and only mandatory steps carry a schedule at all. **Sequencing note:** roll `cce-step-sla-service` to this release *before* this service, or its old build jams on a `transition_type` it cannot map
 - `ddl-auto=validate` ensures Hibernate validates entity mappings against the actual schema
 - **Production:** set `spring.flyway.baseline-on-migrate=false` (default in the prod profile)
 

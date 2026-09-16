@@ -197,10 +197,11 @@ per-process, so no leasing is needed.
 
 ## 3. Time-Driven SLA Transitions (owned elsewhere)
 
-Matcher schedules these but does not apply them. When it creates a step it writes one
-`step_sla_state_transition` row per threshold; the CCE Step SLA Service claims a row once its deadline
-has passed — or as soon as the step completes, since `completed_at` then decides the outcome on its own —
-applies the `sla_status` change, and records the `OVERDUE` / `MISSED` deviation. There is no Kafka hop —
+Matcher schedules these but does not apply them. Creating a step writes one
+`step_sla_state_transition` row per deadline, and completing one on time adds a
+`MET_CONDITION_REACHED` row whose `process_by` is that `completed_at`. The CCE Step SLA Service claims
+each row once its `next_attempt_at` has passed — one gate, nothing fetched early — applies the
+`sla_status` change, and records the `OVERDUE` / `MISSED` deviation where there was a breach. There is no Kafka hop —
 the two services meet on the table, with one writer per column. See
 [Architecture Overview §1.1](architecture-overview.md#11-sla-transition-evaluation-contract).
 
@@ -211,17 +212,21 @@ sequenceDiagram
     participant Eval as CCE Step SLA Service
 
     Matcher->>DB: createStep + INSERT step_sla_state_transition (same tx)
-    Note over Matcher,DB: One row per threshold present —<br/>a step with no tolerance-days gets no MISSED row
+    Note over Matcher,DB: One row per deadline present — a step with no<br/>tolerance-days gets no MISSED row, an optional step gets none at all
+    Matcher->>DB: completeStep + INSERT MET_CONDITION_REACHED (same tx)
+    Note over Matcher,DB: Only when completed_at beat the step's due_date;<br/>process_by = completed_at, so the row is due at once
 
     loop Polling interval
         Eval->>DB: Claim rows WHERE is_processed = FALSE<br/>AND next_attempt_at <= now() FOR UPDATE SKIP LOCKED
-        Eval->>DB: Read step_status / completed_at to judge the crossing
-        alt Step NOT_STARTED
+        Eval->>DB: Read step_status / completed_at / due_date to reach the verdict
+        alt Deadline row, step NOT_STARTED
             Eval->>DB: UPDATE sla_status + INSERT deviation
-        else Step COMPLETED past process_by
-            Eval->>DB: INSERT deviation only<br/>(completion already settled sla_status)
-        else Step COMPLETED before process_by
+        else Deadline row, step COMPLETED at or past process_by
+            Eval->>DB: UPDATE sla_status + INSERT deviation — recorded, but late
+        else Deadline row, step COMPLETED before process_by
             Eval->>DB: Consume the row — nothing breached
+        else MET_CONDITION_REACHED, completed_at &lt; due_date
+            Eval->>DB: UPDATE sla_status = MET — no deviation
         end
         Eval->>DB: UPDATE …SET is_processed = true (same tx)
     end

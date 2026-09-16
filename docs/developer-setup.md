@@ -149,19 +149,20 @@ Configured via `cce.kafka.topics.*` in `application.yml`:
 | `spring.flyway.out-of-order` | `true` | Tolerates a migration landing behind one already applied |
 | `spring.flyway.table` | `flyway_schema_history_matcher` | Namespaced history table so each CCE service tracks its own migrations in the shared database |
 
-There are two migrations, and one chain serves both a new database and one carried over from the
-pre-split monolith:
+One chain serves both a new database and one carried over from the pre-split monolith:
 
 | Migration | On a new database | On a 1.x (pre-split) `ccedb` |
 |---|---|---|
 | `V1__initial_schema.sql` | Creates the whole 2.0.0 schema | **Skipped** — recorded as already applied |
 | `V2__upgrade_from_monolith_schema.sql` | No-op — every block is guarded on the presence of the 1.x shape | Performs the transformation (splits `state` into `step_status`/`sla_status`, moves the deadlines into `step_sla_state_transition`, renames `compliance_event_log`) |
+| `V3__met_condition_reached.sql` | Admits the `MET_CONDITION_REACHED` transition type, seeds a row for every step already completed on time and not yet judged, and drops the index the retired on-time sweep read | Same — the seeded rows are whatever V2 has just left unjudged |
+| `V4__optional_steps_have_no_schedule.sql` | Deletes every transition row belonging to a step that is not `must` | Same, and it is what removes the optional-step rows V2's backfill seeds |
 
 **New database:** leave `CCE_FLYWAY_BASELINE_VERSION` at `0`. V1 builds the schema, V2 finds nothing to
-change.
+change, V3 and V4 find nothing to seed or delete.
 
 **Upgrading an existing 1.x database:** set `CCE_FLYWAY_BASELINE_VERSION=1` for that one deployment, so
-Flyway records V1 as applied and runs only V2. Return it to `0` afterwards. This cannot be auto-detected:
+Flyway records V1 as applied and runs V2 onward. Return it to `0` afterwards. This cannot be auto-detected:
 by the time this service migrates, the Protocol Service has already created its tables, so an
 "is the schema empty?" check would never be true here.
 

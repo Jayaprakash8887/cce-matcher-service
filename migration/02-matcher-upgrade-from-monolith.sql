@@ -217,6 +217,10 @@ BEGIN
            0, s.due_date, now()
     FROM step_instance s
     WHERE s.due_date IS NOT NULL
+      -- Mandatory steps only: nothing is required of an optional step, so it has no deadline to
+      -- breach and no schedule to carry. 'must' is the only mandatory value; an absent one states no
+      -- requirement.
+      AND s.required_behavior = 'must'
     ON CONFLICT (step_instance_id, transition_type) DO NOTHING;
 
     INSERT INTO step_sla_state_transition
@@ -234,6 +238,7 @@ BEGIN
            0, s.missed_date, now()
     FROM step_instance s
     WHERE s.missed_date IS NOT NULL
+      AND s.required_behavior = 'must'
     ON CONFLICT (step_instance_id, transition_type) DO NOTHING;
 
     RAISE NOTICE 'Backfilled % SLA transition row(s)',
