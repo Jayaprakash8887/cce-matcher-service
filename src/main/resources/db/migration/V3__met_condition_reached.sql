@@ -13,6 +13,9 @@
 -- due date, and the Step SLA Service applies it like any other row. This migration admits the new
 -- transition_type, seeds the rows for work already completed on time and not yet judged, and drops
 -- the index the retired sweep read.
+--
+-- V1 and V2 describe that sweep in their own comments. They are left exactly as written: an applied
+-- migration is the record of the release that applied it, and editing one changes its checksum.
 -- ==============================================================================
 
 -- ── 1. Admit the new transition type ─────────────────────────────────────────
@@ -47,6 +50,7 @@ WHERE s.step_status = 'COMPLETED'
 ON CONFLICT (step_instance_id, transition_type) DO NOTHING;
 
 -- ── 3. Drop the retired sweep's index ────────────────────────────────────────
--- V2 created this for the on-time sweep's predicate. The sweep is gone, so the index has no reader,
--- and a partial index over a moving set is not free to maintain.
+-- V1 creates this for the on-time sweep's predicate and V2 recreates it on an upgraded database. The
+-- sweep is gone, so the index has no reader, and a partial index over a moving set is not free to
+-- maintain.
 DROP INDEX IF EXISTS idx_step_instance_completed_unjudged;
