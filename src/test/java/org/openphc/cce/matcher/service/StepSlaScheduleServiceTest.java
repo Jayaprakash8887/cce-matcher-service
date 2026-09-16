@@ -104,6 +104,32 @@ class StepSlaScheduleServiceTest {
         }
     }
 
+    @Nested
+    class OptionalSteps {
+
+        @Test
+        void optionalStep_schedulesNothingEvenWithBothThresholds() {
+            // Nothing is required of an optional step, so there is nothing it can fail to do by a
+            // deadline. Rows for one would only schedule a judgement the Step SLA Service declines.
+            OffsetDateTime due = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
+
+            service.schedule(buildStep("could"), due, due.plusDays(3));
+
+            verify(transitionRepository, never()).saveAll(any());
+        }
+
+        @Test
+        void absentRequiredBehaviourIsOptionalToo() {
+            // "must" is the only thing that makes a step mandatory — an unstated requiredBehavior
+            // states no requirement, which is the reading progressive instantiation takes as well.
+            OffsetDateTime due = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
+
+            service.schedule(buildStep(null), due, due.plusDays(3));
+
+            verify(transitionRepository, never()).saveAll(any());
+        }
+    }
+
     // ── Helpers ──
 
     @SuppressWarnings("unchecked")
@@ -124,12 +150,18 @@ class StepSlaScheduleServiceTest {
                 .build();
     }
 
+    /** A mandatory step: the only kind that is scheduled at all. */
     private static StepInstance buildStep() {
+        return buildStep("must");
+    }
+
+    private static StepInstance buildStep(String requiredBehavior) {
         return StepInstance.builder()
                 .id(UUID.randomUUID())
                 .actionId("bp-check")
                 .repeatIndex(0)
                 .stepStatus(StepStatus.NOT_STARTED)
+                .requiredBehavior(requiredBehavior)
                 .build();
     }
 }

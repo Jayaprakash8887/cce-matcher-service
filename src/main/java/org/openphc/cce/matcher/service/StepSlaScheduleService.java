@@ -4,6 +4,7 @@ import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.entity.StepSlaStateTransition;
 import org.openphc.cce.common.enums.SlaTransitionType;
 import org.openphc.cce.common.repository.StepSlaStateTransitionRepository;
+import org.openphc.cce.common.support.RequiredBehavior;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,6 +22,9 @@ import java.util.UUID;
  * <p>Each threshold is the {@code process_by} of one transition row rather than a column on the step.
  * That keeps the evaluating service's working set in a table that shrinks as work is processed, instead
  * of requiring a scan of every step row to re-derive what has already fired.
+ *
+ * <p>Only mandatory steps are scheduled. Every row in the table therefore belongs to a step the
+ * protocol required, which is what makes a breach meaningful at all — see {@link #schedule}.
  *
  * <p>This service is <strong>create-only</strong> on the table: it never sets {@code is_processed},
  * {@code processed_at}, {@code attempts} or {@code next_attempt_at} after insert. Those belong to the
@@ -53,11 +57,32 @@ public class StepSlaScheduleService {
      * <p>A threshold that is absent gets no row: there is nothing for the evaluator to fire, and an
      * absent deadline is precisely what "this step cannot go overdue" means.
      *
+     * <p>Neither does an optional step, whatever thresholds it was created with. A deadline is the
+     * point at which required work has not been recorded, and nothing is required of an optional step —
+     * so it can be neither {@code OVERDUE} nor {@code MISSED}, and a row for one only schedules a
+     * judgement the Step SLA Service must then decline to make. This is the enforcement that holds:
+     * {@code PlanDefinitionParser.validateOptionalStepDeadlines} rejects such a protocol at load, but
+     * protocols loaded before that check existed are already in the database, and their steps come
+     * through here.
+     *
+     * <p>Optional is {@code requiredBehavior != "must"}, including absent — the same reading
+     * progressive instantiation takes, so a step is not required by one rule and optional by the next.
+     *
      * @param step       the step being created, already persisted so it has an id
      * @param dueDate    when the step should go {@code OVERDUE}, or null
      * @param missedDate when the step should be written off as {@code MISSED}, or null
      */
     public void schedule(StepInstance step, OffsetDateTime dueDate, OffsetDateTime missedDate) {
+        if (!RequiredBehavior.isMandatory(step.getRequiredBehavior())) {
+            if (dueDate != null || missedDate != null) {
+                log.warn("Step {} (actionId={}) is optional (requiredBehavior={}) — its deadlines "
+                                + "(due={}, missed={}) schedule nothing: an optional step cannot go "
+                                + "OVERDUE or MISSED",
+                        step.getId(), step.getActionId(), step.getRequiredBehavior(), dueDate, missedDate);
+            }
+            return;
+        }
+
         List<StepSlaStateTransition> rows = new ArrayList<>(2);
         addIfScheduled(rows, step.getId(), SlaTransitionType.DUE_DATE_REACHED, dueDate);
         addIfScheduled(rows, step.getId(), SlaTransitionType.MISSED_DATE_REACHED, missedDate);

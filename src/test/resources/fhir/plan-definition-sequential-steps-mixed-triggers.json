@@ -216,12 +216,6 @@
           "periodUnit": "d"
         }
       },
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 1
-        }
-      ],
       "type": {
         "coding": [
           {

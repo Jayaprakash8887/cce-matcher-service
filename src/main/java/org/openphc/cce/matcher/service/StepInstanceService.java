@@ -13,6 +13,7 @@ import org.openphc.cce.common.enums.StepStatus;
 import org.openphc.cce.common.repository.StepInstanceRepository;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
+import org.openphc.cce.common.support.RequiredBehavior;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -309,7 +310,7 @@ public class StepInstanceService {
             // driven to MISSED and raise a spurious deviation. When an optional step's
             // event does arrive, MatcherEngine.processMatch creates the instance on the fly
             // (createInitialStep) and completes it in the same transaction.
-            if (!"must".equals(requiredBehavior)) {
+            if (!RequiredBehavior.isMandatory(requiredBehavior)) {
                 log.debug("Skipping progressive instantiation of non-mandatory step {} "
                                 + "(requiredBehavior={}, instanceId={})",
                         targetStep.id(), requiredBehavior, protocolInstance.getId());

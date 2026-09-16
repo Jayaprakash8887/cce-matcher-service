@@ -63,12 +63,6 @@
           "type": "named-event"
         }
       ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 30
-        }
-      ],
       "description": "Family planning assessment. Optional.",
       "timingTiming": {
         "repeat": {
@@ -123,12 +117,6 @@
           ],
           "name": "pregnancy-profile-trigger",
           "type": "named-event"
-        }
-      ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 14
         }
       ],
       "description": "Pregnancy registration. When completed, triggers the ANC Visit 1 step.",
@@ -268,12 +256,6 @@
                 "language": "text/fhirpath",
                 "expression": "ServiceRequest.patientInstruction.matches('.*ANC Visit +1') and ServiceRequest.status = 'active'"
               }
-            }
-          ],
-          "extension": [
-            {
-              "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-              "valueInteger": 7
             }
           ],
           "description": "ANC Visit 1 referral. Entry-point sub-step — created when ANC Visit 1 completes.",
@@ -529,12 +511,6 @@
               }
             }
           ],
-          "extension": [
-            {
-              "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-              "valueInteger": 7
-            }
-          ],
           "description": "ANC Visit 2 referral. Entry-point sub-step — created when ANC Visit 2 completes.",
           "timingTiming": {
             "repeat": {
@@ -788,12 +764,6 @@
               }
             }
           ],
-          "extension": [
-            {
-              "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-              "valueInteger": 7
-            }
-          ],
           "description": "ANC Visit 3 referral. Entry-point sub-step — created when ANC Visit 3 completes.",
           "timingTiming": {
             "repeat": {
@@ -962,12 +932,6 @@
           ],
           "name": "pregnancy-outcome-trigger",
           "type": "named-event"
-        }
-      ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 14
         }
       ],
       "description": "Pregnancy outcome recording (delivery). Pending from registration.",

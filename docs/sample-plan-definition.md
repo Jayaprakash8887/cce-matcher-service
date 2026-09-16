@@ -70,6 +70,7 @@ This document provides a complete, annotated `PlanDefinition` that exercises eve
     {
       "id": "hba1c-check",
       "title": "HbA1c Monitoring",
+      "requiredBehavior": "must",
       "description": "Quarterly HbA1c test to evaluate glycaemic control.",
       "type": {
         "coding": [
@@ -237,6 +238,7 @@ This document provides a complete, annotated `PlanDefinition` that exercises eve
     {
       "id": "blood-glucose-check",
       "title": "Fasting Blood Glucose Check",
+      "requiredBehavior": "must",
       "description": "Weekly fasting blood glucose observation.",
       "type": {
         "coding": [
@@ -642,13 +644,15 @@ Each `definitionCanonical` referenced in the PlanDefinition must have a register
 | Intelligence destination | `intelligence-destination` extension | Free-form string (routing destination for the Intelligence Service); this example uses `PATIENT`, `ASSIGNED_WORKER`, `SUPERVISOR`, `FACILITY` |
 | Deviation type (jsonlogic var) | `event.deviationType` | `"missed"`, `"order_violation"` — **not** `"overdue"`: reaching `sla_status = OVERDUE` raises no deviation, so an action conditioned on `"overdue"` never fires |
 | Step tolerance window | `tolerance-days` extension | Integer (days) |
-| Required step | `requiredBehavior` | `must`, `could`, `must-unless-documented` — only `must` and `could` have distinct handling today (see note below) |
+| Required step | `requiredBehavior` | `must`, `could`, `must-unless-documented` — `must` is the only mandatory value, and the only one that may carry a deadline (see note below) |
 | Step scheduling | `timingTiming.repeat` | `count`, `frequency`, `period`, `periodUnit` |
 | Action ordering | `relatedAction[].actionId` + `offsetDuration` | The step names its **prerequisite** — `offsetDuration` is how long after that prerequisite this step is due |
 | ActivityDefinition type | `kind` | `CommunicationRequest`, `Task`, `ServiceRequest` |
 | Canonical reference format | `definitionCanonical` | `<url>|<version>` |
 
-`requiredBehavior` note: `must` drives the "must"-only predecessor backfill gating in `StepInstanceService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`); `could` keeps a step out of progressive instantiation entirely — an optional step is never pre-created, only materialized on the fly if its own trigger fires — and exempts it from the `MISSED` status and deviation when its missed threshold falls. `must-unless-documented` is a valid FHIR `requiredBehavior` code and is accepted (see the `data-dictionary.md` `required_behavior` check constraint), but the parser and services do not currently branch on it — it behaves like a step with no special required-behavior handling.
+`requiredBehavior` note: **only `must` is mandatory, and an absent value is not.** `must` drives the "must"-only predecessor backfill gating in `StepInstanceService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`), and it is the only value that gets an SLA schedule: a step that is not `must` is never pre-created by progressive instantiation (only materialized on the fly if its own trigger fires), gets no `step_sla_state_transition` rows, and can therefore be neither `OVERDUE` nor `MISSED` — nothing was required of it, so there is nothing for it to breach. The one definition is `RequiredBehavior.isMandatory`.
+
+Consequently **`tolerance-days` on an action that is not `must` is rejected at load** by the Protocol Service: it would enforce nothing while looking as though it does. `must-unless-documented` is a valid FHIR code and is still accepted (see the `data-dictionary.md` `required_behavior` check constraint), but nothing branches on it — so it is optional like `could`, deadlines included.
 
 ---
 

@@ -184,9 +184,6 @@
               "type": "named-event"
             }
           ],
-          "extension": [
-            { "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days", "valueInteger": 1 }
-          ],
           "description": "Clinical consultation - history recording. Matches Observation with LOINC code 10164-2 (History of Present illness Narrative).",
           "timingTiming": {
             "repeat": { "count": 1, "period": 1, "frequency": 1, "periodUnit": "d" }
@@ -370,9 +367,6 @@
               "name": "referral-trigger",
               "type": "named-event"
             }
-          ],
-          "extension": [
-            { "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days", "valueInteger": 1 }
           ],
           "description": "Patient referral/transfer to another facility. Matches Encounter with type display TRANSFER_ENCOUNTER.",
           "timingTiming": {

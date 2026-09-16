@@ -71,12 +71,6 @@
           "type": "named-event"
         }
       ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 14
-        }
-      ],
       "description": "Pregnancy registration. When completed, triggers the ANC Visit 1 step.",
       "timingTiming": {
         "repeat": {
@@ -417,12 +411,6 @@
           ],
           "name": "anc-visit-1-trigger",
           "type": "named-event"
-        }
-      ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 7
         }
       ],
       "description": "First antenatal care visit. Has triggers and nested sub-steps (referral chain). Sub-steps are created after this step completes.",
@@ -767,12 +755,6 @@
           "type": "named-event"
         }
       ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 7
-        }
-      ],
       "description": "Second antenatal care visit. Has triggers and nested sub-steps (referral chain).",
       "timingTiming": {
         "repeat": {
@@ -1115,12 +1097,6 @@
           "type": "named-event"
         }
       ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 7
-        }
-      ],
       "description": "Third antenatal care visit. Terminal ANC step \u2014 no further ANC visits.",
       "timingTiming": {
         "repeat": {
@@ -1177,12 +1153,6 @@
           "type": "named-event"
         }
       ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 14
-        }
-      ],
       "description": "Pregnancy outcome recording (delivery). Pending from registration.",
       "timingTiming": {
         "repeat": {
@@ -1237,12 +1207,6 @@
           ],
           "name": "pnc-trigger",
           "type": "named-event"
-        }
-      ],
-      "extension": [
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-          "valueInteger": 7
         }
       ],
       "description": "Postnatal care visit for the mother. Mandatory after pregnancy outcome.",
