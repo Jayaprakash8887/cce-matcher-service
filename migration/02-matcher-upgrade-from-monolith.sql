@@ -181,7 +181,7 @@ CREATE TABLE IF NOT EXISTS step_sla_state_transition (
     CONSTRAINT step_sla_state_transition_step_instance_id_fkey
         FOREIGN KEY (step_instance_id) REFERENCES step_instance(id),
     CONSTRAINT step_sla_state_transition_type_check
-        CHECK (transition_type IN ('DUE_DATE_REACHED', 'MISSED_DATE_REACHED'))
+        CHECK (transition_type IN ('DUE_DATE_REACHED', 'MISSED_DATE_REACHED', 'MET_CONDITION_REACHED'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_sslt_due

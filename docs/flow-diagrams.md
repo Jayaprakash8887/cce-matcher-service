@@ -254,23 +254,22 @@ flowchart TD
     N --> P
 
     P --> SS["step_status = COMPLETED<br/>(the event arrived — always set)"]
-    SS --> Q{"Settle sla_status against the<br/>scheduled thresholds<br/>(completedAt = clinical occurrence time)"}
+    SS --> W["Set completedAt, completedBySource,<br/>matchedEventId<br/>(completedAt = clinical occurrence time)"]
+    W --> Q{"completedAt &lt; dueDate?"}
 
-    Q -->|"No due threshold<br/>— nothing to breach"| MET["sla_status = MET"]
-    Q -->|"completedAt &lt; dueDate<br/>— beat the deadline"| MET
-    Q -->|"dueDate ≤ completedAt &lt; missedDate<br/>— recorded late"| OD["sla_status = OVERDUE"]
-    Q -->|"completedAt ≥ missedDate<br/>— recorded after being written off"| MI["sla_status = MISSED"]
+    Q -->|"yes — the work beat the deadline"| MET["Schedule MET_CONDITION_REACHED<br/>process_by = completedAt, so it is due at once"]
+    Q -->|"no, or no dueDate, or optional"| NONE["Schedule nothing —<br/>the step's own deadline rows already carry it"]
 
-    MET --> W["Set completedAt, completedBySource,<br/>matchedEventId"]
-    OD --> W
-    MI --> W
-    W --> X["Record the transition in step_instance_history"]
+    MET --> X["Record the transition in step_instance_history"]
+    NONE --> X
+    X --> Y["Step SLA Service applies the rows<br/>and writes sla_status"]
 ```
 
-**The two statuses are independent.** `step_status` answers *did the work happen?* and is always
-`COMPLETED` here. `sla_status` answers *was it on time?* and is one of the three outcomes above — so a
-row can legitimately read `COMPLETED` + `MISSED`, meaning the work was done but only after the step had
-been written off.
+**`sla_status` is not written here.** This service records that the work happened and when, and
+schedules the verdict; the Step SLA Service reaches it. `step_status` answers *did the work happen?* and
+is always `COMPLETED` here. `sla_status` answers *was it on time?* and arrives a cycle later — so a row
+can legitimately read `COMPLETED` + `MISSED`, meaning the work was done but only after the step had been
+written off.
 
 > There is no `EARLY` or `ON_TIME` status. The 1.x schema had a separate `completion_status` column with
 > `EARLY`/`ON_TIME`/`LATE`; `V2` drops it, because the pair above already expresses it —

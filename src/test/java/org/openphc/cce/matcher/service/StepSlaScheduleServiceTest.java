@@ -130,7 +130,82 @@ class StepSlaScheduleServiceTest {
         }
     }
 
+    @Nested
+    class MetOnCompletion {
+
+        @Test
+        void onTimeCompletion_schedulesTheMetTransitionAtTheCompletionItself() {
+            // process_by is the completed_at that satisfied the condition, so the row is due at once
+            // and the Step SLA Service records MET on its next cycle — not at a due date days away.
+            StepInstance step = buildStep();
+            OffsetDateTime due = OffsetDateTime.now(ZoneOffset.UTC).plusDays(4);
+            step.setDueDate(due);
+            OffsetDateTime completedAt = OffsetDateTime.now(ZoneOffset.UTC).minusHours(2);
+
+            service.scheduleMetIfOnTime(step, completedAt);
+
+            StepSlaStateTransition row = captureSavedRow();
+            assertEquals(SlaTransitionType.MET_CONDITION_REACHED, row.getTransitionType());
+            assertEquals(step.getId(), row.getStepInstanceId());
+            assertEquals(completedAt, row.getProcessBy());
+            assertEquals(completedAt, row.getNextAttemptAt());
+            // Applying it is the other service's job, as with every other row.
+            assertFalse(row.isProcessed());
+            assertEquals(0, row.getAttempts());
+        }
+
+        @Test
+        void lateCompletion_schedulesNothing() {
+            // The step's own DUE_DATE_REACHED row is already scheduled to catch this; there is no MET
+            // to record and nothing to ask.
+            StepInstance step = buildStep();
+            step.setDueDate(OffsetDateTime.now(ZoneOffset.UTC).minusDays(1));
+
+            service.scheduleMetIfOnTime(step, OffsetDateTime.now(ZoneOffset.UTC));
+
+            verify(transitionRepository, never()).save(any());
+        }
+
+        @Test
+        void completionExactlyAtTheDueDate_schedulesNothing() {
+            // Same boundary the Step SLA Service judges on: at the deadline is not before it.
+            StepInstance step = buildStep();
+            OffsetDateTime due = OffsetDateTime.now(ZoneOffset.UTC).plusDays(1);
+            step.setDueDate(due);
+
+            service.scheduleMetIfOnTime(step, due);
+
+            verify(transitionRepository, never()).save(any());
+        }
+
+        @Test
+        void stepWithNoDueDate_schedulesNothing() {
+            // Nothing to have beaten — a step created from its own trigger is the usual case.
+            service.scheduleMetIfOnTime(buildStep(), OffsetDateTime.now(ZoneOffset.UTC));
+
+            verify(transitionRepository, never()).save(any());
+        }
+
+        @Test
+        void optionalStep_schedulesNothing() {
+            // An optional step has no deadline at all, so no due date it can be said to have beaten.
+            StepInstance step = buildStep("could");
+            step.setDueDate(OffsetDateTime.now(ZoneOffset.UTC).plusDays(4));
+
+            service.scheduleMetIfOnTime(step, OffsetDateTime.now(ZoneOffset.UTC).minusHours(2));
+
+            verify(transitionRepository, never()).save(any());
+        }
+    }
+
     // ── Helpers ──
+
+    private StepSlaStateTransition captureSavedRow() {
+        ArgumentCaptor<StepSlaStateTransition> captor =
+                ArgumentCaptor.forClass(StepSlaStateTransition.class);
+        verify(transitionRepository).save(captor.capture());
+        return captor.getValue();
+    }
 
     @SuppressWarnings("unchecked")
     private Map<SlaTransitionType, StepSlaStateTransition> captureRows() {

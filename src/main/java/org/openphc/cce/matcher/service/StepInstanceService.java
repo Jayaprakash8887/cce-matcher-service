@@ -141,14 +141,20 @@ public class StepInstanceService {
         SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.getThresholds(step.getId());
 
         // sla_status is deliberately left alone. Recording that the work happened and judging whether
-        // it was timely are different questions with different owners; writing both here is what used
-        // to require a rule about which service may overwrite the other.
+        // it was timely are different questions with different owners; this service only schedules the
+        // second one (below), and writing both here is what used to require a rule about which service
+        // may overwrite the other.
         step.setStepStatus(StepStatus.COMPLETED);
         step.setCompletedAt(completedAt);
         step.setMatchedEventId(matchedEventId);
         step.setCompletedBySource(completedBySource);
 
         stepInstanceRepository.save(step);
+
+        // Work recorded before the deadline is a verdict waiting to be written, so schedule it now.
+        // The Step SLA Service takes the row on its next cycle; without it, a step completed weeks
+        // early would sit unjudged until its due date arrived.
+        slaScheduleService.scheduleMetIfOnTime(step, completedAt);
 
         // Capture the COMPLETED transition in append-only history.
         stateTransitionHistoryWriter.recordStepInstanceTransition(step, now);

@@ -154,6 +154,24 @@ class StepInstanceServiceTest {
         }
 
         @Test
+        void completionBeforeTheDueDate_schedulesTheMetTransition() {
+            // The one SLA thing completion does: schedule the verdict. Writing MET here would make
+            // this service a second writer of sla_status — the row hands the question over instead.
+            OffsetDateTime dueDate = OffsetDateTime.now(ZoneOffset.UTC).plusDays(7);
+            StepInstance step = buildStep(StepStatus.NOT_STARTED, null, dueDate, dueDate.plusDays(3));
+            step.setDueDate(dueDate);
+            step.setRequiredBehavior("must");
+
+            when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+            lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
+
+            service.completeStep(step, UUID.randomUUID(), "test-source", null);
+
+            verify(slaScheduleService).scheduleMetIfOnTime(eq(step), any(OffsetDateTime.class));
+            assertNull(step.getSlaStatus(), "sla_status is still Step SLA's to write");
+        }
+
+        @Test
         void completedAfterDueButBeforeMissed_slaStaysOverdue() {
             OffsetDateTime pastDue = OffsetDateTime.now(ZoneOffset.UTC).minusDays(1);
             OffsetDateTime futureMissed = OffsetDateTime.now(ZoneOffset.UTC).plusDays(5);

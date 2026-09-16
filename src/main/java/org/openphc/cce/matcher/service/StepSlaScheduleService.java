@@ -32,7 +32,9 @@ import java.util.UUID;
  *
  * <p>Rows are written with {@link Propagation#MANDATORY} so they can only ever be created inside the
  * caller's transaction — a step and its schedule commit or roll back together, and there is no window
- * in which a step exists with no schedule (or a schedule with no step).
+ * in which a step exists with no schedule (or a schedule with no step). The same holds for the
+ * {@code MET_CONDITION_REACHED} row {@link #scheduleMetIfOnTime} adds at completion: it commits with
+ * the {@code completed_at} it stands for.
  *
  * <p>Write-only. Reading a step's thresholds back is
  * {@link org.openphc.cce.common.sla.SlaThresholdReader}, shared with the Step SLA Service so the
@@ -96,6 +98,45 @@ public class StepSlaScheduleService {
         transitionRepository.saveAll(rows);
         log.debug("Scheduled {} SLA transition(s) for step {} (actionId={}, due={}, missed={})",
                 rows.size(), step.getId(), step.getActionId(), dueDate, missedDate);
+    }
+
+    /**
+     * Record that a step's work was recorded before its due date, as a {@code MET_CONDITION_REACHED}
+     * row the Step SLA Service applies on its next cycle.
+     *
+     * <p>Unlike the deadlines this is not known when the step is created, so it is written here, at the
+     * completion. {@code process_by} is the {@code completed_at} that satisfied it — the moment the
+     * condition was reached, exactly as the other rows carry the moment their threshold falls — so the
+     * row is due at once and the verdict lands within a poll interval instead of waiting for a due date
+     * that may be weeks away.
+     *
+     * <p>Whether the step was on time is still the Step SLA Service's call: this only schedules the
+     * question. The check here decides whether there is anything to ask, and it asks nothing when the
+     * work was late — the step's {@code DUE_DATE_REACHED} row is already scheduled to catch that.
+     *
+     * <p>Mandatory steps only, like every other row. An optional step has no deadline, so there is no
+     * due date it can be said to have beaten.
+     *
+     * @param step        the step just completed, with its {@code completed_at} already set
+     * @param completedAt the clinical time the work was recorded at
+     */
+    public void scheduleMetIfOnTime(StepInstance step, OffsetDateTime completedAt) {
+        if (!RequiredBehavior.isMandatory(step.getRequiredBehavior())) {
+            return;
+        }
+        if (step.getDueDate() == null || completedAt == null || !completedAt.isBefore(step.getDueDate())) {
+            return;
+        }
+
+        transitionRepository.save(StepSlaStateTransition.builder()
+                .stepInstanceId(step.getId())
+                .transitionType(SlaTransitionType.MET_CONDITION_REACHED)
+                .processBy(completedAt)
+                .nextAttemptAt(completedAt)
+                .build());
+
+        log.debug("Step {} (actionId={}) was recorded at {}, before its due date of {} — MET scheduled",
+                step.getId(), step.getActionId(), completedAt, step.getDueDate());
     }
 
     private void addIfScheduled(List<StepSlaStateTransition> rows, UUID stepInstanceId,
