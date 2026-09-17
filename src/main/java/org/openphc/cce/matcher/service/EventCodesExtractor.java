@@ -40,6 +40,7 @@ public class EventCodesExtractor {
             String path = triggerPath.fhirPath();
             switch (triggerPath.shape()) {
                 case CODEABLE_CONCEPT -> extractCodingsFromPath(event, path, result);
+                case CODING -> extractCoding(event, path, result);
                 case CODEABLE_CONCEPT_ARRAY -> extractCodingsFromArrayPath(event, path, result);
                 case IDENTIFIER_ARRAY -> extractIdentifiers(event, path, result);
                 case PLAIN_STRING -> extractStringField(event, path, result);
@@ -77,6 +78,16 @@ public class EventCodesExtractor {
             // Fallback: some resources define this field as 0..1 CodeableConcept
             extractCodingsFromCodeableConcept(path, node, result);
         }
+    }
+
+    /**
+     * Extract a code from a bare Coding field (e.g., {@code class}), which has {@code system}/{@code code}
+     * directly rather than being wrapped in a {@code coding} array like a CodeableConcept.
+     */
+    private void extractCoding(JsonNode event, String path, List<CodePathTriple> result) {
+        JsonNode node = event.get(path);
+        if (node == null || !node.isObject()) return;
+        addCodePathTriple(path, node, result);
     }
 
     private void extractCodingsFromCodeableConcept(String path, JsonNode codeableConcept,
