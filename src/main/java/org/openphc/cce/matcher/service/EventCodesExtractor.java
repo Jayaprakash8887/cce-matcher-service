@@ -2,11 +2,12 @@ package org.openphc.cce.matcher.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
-import org.openphc.cce.common.fhir.TriggerPath;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 /**
  * Extracts coded values from FHIR resource payloads. Used to prepare inputs for Tier 1 structural
@@ -17,125 +18,95 @@ import java.util.List;
 @Component
 public class EventCodesExtractor {
 
+    /** Top-level fields that identify the resource rather than describe it; never a matching dimension. */
+    private static final Set<String> IDENTITY_FIELDS = Set.of("resourceType", "id");
+
     /**
-     * Extract coded values from FHIR resource payloads for Tier 1 structural matching.
-     * Handles CodeableConcept fields (object or array), and plain string fields like "status".
+     * Extract coded values from every top-level field of a FHIR resource payload for Tier 1 structural
+     * matching. The field's shape is inferred from the JSON itself, so a trigger on a field nobody has
+     * used before needs no code change:
      *
-     * <p>Driven by {@link TriggerPath}, which is also what the Protocol Service validates a
-     * PlanDefinition's {@code codeFilter.path} values against. The two used to be separate lists, and a
-     * path present in the protocol's but missing from this one was indexed and then never matched —
-     * silently disabling the action, since matching requires every codeFilter of an action to match. One
-     * enum, so a new path reaches both sides in the same change.
+     * <ul>
+     *   <li>an object with a {@code coding} array is a CodeableConcept — each coding is read;</li>
+     *   <li>an object with a {@code code} is a bare Coding (e.g. {@code Encounter.class}) — read directly;</li>
+     *   <li>an array of either of those is read item by item;</li>
+     *   <li>an array of objects with a {@code value} is an Identifier list (a lone object is not) — {@code system} and
+     *       {@code value} are read;</li>
+     *   <li>a string is a plain code with no system (e.g. {@code status}).</li>
+     * </ul>
+     *
+     * Anything else (References, Periods, numbers, nested resources) carries no code and is skipped.
+     * {@code PlanDefinitionParser.validateTriggers} accepts any single top-level field name for the
+     * matching {@code codeFilter.path}, so this must read every such field rather than a fixed list.
      *
      * @param event the event payload (JsonNode representation of FHIR resource)
      * @return list of CodePathTriple with path, system, and code
      */
     public List<CodePathTriple> extractCodes(JsonNode event) {
         List<CodePathTriple> result = new ArrayList<>();
-        if (event == null || event.isNull()) {
+        if (event == null || !event.isObject()) {
             return result;
         }
 
-        for (TriggerPath triggerPath : TriggerPath.values()) {
-            String path = triggerPath.fhirPath();
-            switch (triggerPath.shape()) {
-                case CODEABLE_CONCEPT -> extractCodingsFromPath(event, path, result);
-                case CODING -> extractCoding(event, path, result);
-                case CODEABLE_CONCEPT_ARRAY -> extractCodingsFromArrayPath(event, path, result);
-                case IDENTIFIER_ARRAY -> extractIdentifiers(event, path, result);
-                case PLAIN_STRING -> extractStringField(event, path, result);
+        for (Map.Entry<String, JsonNode> field : event.properties()) {
+            String path = field.getKey();
+            if (IDENTITY_FIELDS.contains(path)) {
+                continue;
+            }
+            JsonNode node = field.getValue();
+            if (node.isTextual()) {
+                result.add(new CodePathTriple(path, "", node.asText()));
+            } else if (node.isObject()) {
+                extractFromObject(path, node, false, result);
+            } else if (node.isArray()) {
+                for (JsonNode item : node) {
+                    if (item.isObject()) {
+                        extractFromObject(path, item, true, result);
+                    }
+                }
             }
         }
 
         return result;
     }
 
-    /**
-     * Extract codings from a CodeableConcept field (single object with coding array).
-     */
-    private void extractCodingsFromPath(JsonNode event, String path, List<CodePathTriple> result) {
-        JsonNode node = event.get(path);
-        if (node == null) return;
-        if (node.isObject()) {
-            extractCodingsFromCodeableConcept(path, node, result);
-        }
-    }
-
-    /**
-     * Extract codings from an array of CodeableConcepts (e.g., type[], category[]).
-     * Also falls back to single-object handling for resources where the field is 0..1.
-     */
-    private void extractCodingsFromArrayPath(JsonNode event, String path, List<CodePathTriple> result) {
-        JsonNode node = event.get(path);
-        if (node == null) return;
-        if (node.isArray()) {
-            for (JsonNode item : node) {
-                if (item.isObject()) {
-                    extractCodingsFromCodeableConcept(path, item, result);
-                }
-            }
-        } else if (node.isObject()) {
-            // Fallback: some resources define this field as 0..1 CodeableConcept
-            extractCodingsFromCodeableConcept(path, node, result);
-        }
-    }
-
-    /**
-     * Extract a code from a bare Coding field (e.g., {@code class}), which has {@code system}/{@code code}
-     * directly rather than being wrapped in a {@code coding} array like a CodeableConcept.
-     */
-    private void extractCoding(JsonNode event, String path, List<CodePathTriple> result) {
-        JsonNode node = event.get(path);
-        if (node == null || !node.isObject()) return;
-        addCodePathTriple(path, node, result);
-    }
-
-    private void extractCodingsFromCodeableConcept(String path, JsonNode codeableConcept,
-                                                    List<CodePathTriple> result) {
-        JsonNode codingList = codeableConcept.get("coding");
+    private void extractFromObject(String path, JsonNode node, boolean arrayItem,
+                                   List<CodePathTriple> result) {
+        JsonNode codingList = node.get("coding");
         if (codingList != null && codingList.isArray()) {
             for (JsonNode coding : codingList) {
                 if (coding.isObject()) {
                     addCodePathTriple(path, coding, result);
                 }
             }
+        } else if (isText(node.get("code"))) {
+            addCodePathTriple(path, node, result);
+        } else if (arrayItem && isText(node.get("value"))) {
+            addIdentifier(path, node, result);
         }
     }
 
-    private void extractStringField(JsonNode event, String path, List<CodePathTriple> result) {
-        JsonNode node = event.get(path);
-        if (node != null && node.isTextual()) {
-            result.add(new CodePathTriple(path, "", node.asText()));
-        }
-    }
-
-    /**
-     * Extract identifiers from an Identifier array (e.g., identifier[]).
-     * FHIR Identifier has {system, value} — maps to CodePathTriple(path, system, value).
-     */
-    private void extractIdentifiers(JsonNode event, String path, List<CodePathTriple> result) {
-        JsonNode node = event.get(path);
-        if (node == null || !node.isArray()) return;
-        for (JsonNode identifier : node) {
-            if (!identifier.isObject()) continue;
-            JsonNode value = identifier.get("value");
-            if (value == null || !value.isTextual()) continue;
-            JsonNode system = identifier.get("system");
-            String systemStr = (system != null && system.isTextual()) ? system.asText() : "";
-            result.add(new CodePathTriple(path, systemStr, value.asText()));
-        }
+    private void addIdentifier(String path, JsonNode identifier, List<CodePathTriple> result) {
+        result.add(new CodePathTriple(path, textOrEmpty(identifier.get("system")),
+                identifier.get("value").asText()));
     }
 
     private void addCodePathTriple(String path, JsonNode coding, List<CodePathTriple> result) {
         JsonNode code = coding.get("code");
-        if (code == null || !code.isTextual()) {
+        if (!isText(code)) {
             // Fallback: use "display" when "code" is absent (e.g., TRANSFER_ENCOUNTER)
             code = coding.get("display");
         }
-        if (code != null && code.isTextual()) {
-            JsonNode system = coding.get("system");
-            String systemStr = (system != null && system.isTextual()) ? system.asText() : "";
-            result.add(new CodePathTriple(path, systemStr, code.asText()));
+        if (isText(code)) {
+            result.add(new CodePathTriple(path, textOrEmpty(coding.get("system")), code.asText()));
         }
+    }
+
+    private static boolean isText(JsonNode node) {
+        return node != null && node.isTextual();
+    }
+
+    private static String textOrEmpty(JsonNode node) {
+        return isText(node) ? node.asText() : "";
     }
 }

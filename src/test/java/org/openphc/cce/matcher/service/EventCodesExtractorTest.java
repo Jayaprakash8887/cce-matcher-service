@@ -366,4 +366,46 @@ class EventCodesExtractorTest {
                 codes.stream().filter(c -> "identifier".equals(c.path())).toList());
     }
 
+    // ── shape inference ──
+
+    @Test
+    void extractCodes_encounterClass_isABareCodingWithNoCodingWrapper() {
+        JsonNode event = toJsonNode(Map.of(
+                "resourceType", "Encounter",
+                "class", Map.of("system", "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code", "AMB")));
+
+        assertEquals(List.of(new CodePathTriple("class",
+                        "http://terminology.hl7.org/CodeSystem/v3-ActCode", "AMB")),
+                extractor.extractCodes(event));
+    }
+
+    @Test
+    void extractCodes_aFieldNoOneHasListed_isReadByItsShape() {
+        JsonNode event = toJsonNode(Map.of(
+                "resourceType", "Observation",
+                "bodySite", Map.of("coding", List.of(Map.of("system", "http://snomed.info/sct", "code", "1234"))),
+                "priority", "routine"));
+
+        List<CodePathTriple> codes = extractor.extractCodes(event);
+
+        assertTrue(codes.contains(new CodePathTriple("bodySite", "http://snomed.info/sct", "1234")));
+        assertTrue(codes.contains(new CodePathTriple("priority", "", "routine")));
+    }
+
+    @Test
+    void extractCodes_resourceTypeAndIdAreNotMatchingDimensions() {
+        JsonNode event = toJsonNode(Map.of("resourceType", "Encounter", "id", "enc-1"));
+
+        assertTrue(extractor.extractCodes(event).isEmpty());
+    }
+
+    @Test
+    void extractCodes_referencesAndNumbersCarryNoCode() {
+        JsonNode event = toJsonNode(Map.of(
+                "resourceType", "Encounter",
+                "subject", Map.of("reference", "Patient/1", "display", "Jane"),
+                "length", 42));
+
+        assertTrue(extractor.extractCodes(event).isEmpty());
+    }
 }

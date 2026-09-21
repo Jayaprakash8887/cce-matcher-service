@@ -271,21 +271,30 @@ Resource metadata is extracted from the CloudEvent **payload** (`data`), never f
 | Field | Extraction Paths |
 |---|---|
 | `resourceType` | `data.resourceType` (e.g., `"Observation"`, `"Encounter"`) |
-| `allCodes` | `data.code.coding[*]`, `data.class.coding[*]`, `data.serviceType.coding[*]`, `data.clinicalStatus.coding[*]`, `data.verificationStatus.coding[*]`, `data.type[*].coding[*]`, `data.category[*].coding[*]`, `data.identifier[*]` (system+value), `data.status` |
+| `allCodes` | every top-level field of `data` except `resourceType` and `id`, read by the shape the JSON has (below) |
 
-**These nine paths are the whole matchable surface**, and they are one list:
-[`TriggerPath`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/TriggerPath.java) in
-cce-common-util. `EventCodesExtractor` drives its extraction from that enum, and the Protocol Service
-validates every `codeFilter.path` against it at load, so a path reaches both sides in one change or
-neither. The `resourceType` row above is read by
+The extractor **infers each field's shape** rather than consulting a list, so a trigger on a field nobody
+has used before needs no code change:
+
+| Shape found in the payload | Read as |
+|---|---|
+| object with a `coding` array (CodeableConcept), e.g. `code`, `serviceType`, `clinicalStatus` | each `coding` → (system, code) |
+| object with a `code` (bare Coding), e.g. `Encounter.class` | the object itself → (system, code) |
+| array of either of the above, e.g. `type`, `category` | item by item |
+| array of objects with a `value` (Identifier list), e.g. `identifier` | (system, value) |
+| string, e.g. `status` | ("", value) |
+
+References, periods, numbers and anything else carry no code and are skipped. A coding with no `code`
+falls back to its `display`.
+
+The Protocol Service accepts any single top-level field name as a `codeFilter.path`
+([`TriggerPath`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/TriggerPath.java)) and
+rejects dotted or indexed expressions (`participant.type`, `type[0]`), which this extractor cannot follow
+and which would be indexed and never matched — disabling the action, since Tier 1 requires *every*
+codeFilter to match. The trade-off of not having a list is that a misspelt field name loads cleanly and
+simply never matches. The `resourceType` row above is read by
 [`ResourceTypeDetector`](../../cce-common-util/src/main/java/org/openphc/cce/common/fhir/ResourceTypeDetector.java),
-also in cce-common-util, because the Collector Service needs the same reading of the same payload.
-
-It used to be two lists, which is how `serviceType` came to be indexed by the parser and read by
-nothing: a path in the protocol's list but missing from the extractor's is indexed and then never
-matched, and because Tier 1 requires *every* codeFilter of an action to match, one such path disables
-that action's trigger outright rather than loosening it. The reference ANC protocol's enrolment trigger
-was dead for exactly that reason.
+in cce-common-util, because the Collector Service needs the same reading of the same payload.
 
 ### 4.2 Clinical Event Time Extraction
 
