@@ -48,6 +48,10 @@ spring:
     baseline-version: ${CCE_FLYWAY_BASELINE_VERSION:0}
     out-of-order: true
     table: flyway_schema_history_matcher
+    # V5 runs CREATE INDEX CONCURRENTLY, which PostgreSQL refuses inside a transaction block. Flyway
+    # wraps each migration in one transaction by default; `mixed` lets it detect a non-transactional
+    # statement and run that migration outside a transaction instead of failing.
+    mixed: true
 
   # --- Kafka Consumer ---
   kafka:
