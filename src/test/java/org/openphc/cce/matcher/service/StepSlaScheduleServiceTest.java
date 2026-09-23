@@ -54,7 +54,7 @@ class StepSlaScheduleServiceTest {
             assertEquals(2, rows.size());
 
             StepSlaStateTransition toOverdue = rows.get(SlaTransitionType.DUE_DATE_REACHED);
-            assertEquals(step.getId(), toOverdue.getStepInstanceId());
+            assertEquals(step.getId(), toOverdue.getStepInstance().getId());
             assertEquals(due, toOverdue.getProcessBy());
             // The row names the deadline, not a from/to pair: what crossing it means for the step is
             // decided when Step SLA applies it, and read back from step_instance.sla_status.
@@ -146,7 +146,7 @@ class StepSlaScheduleServiceTest {
 
             StepSlaStateTransition row = captureSavedRow();
             assertEquals(SlaTransitionType.MET_CONDITION_REACHED, row.getTransitionType());
-            assertEquals(step.getId(), row.getStepInstanceId());
+            assertEquals(step.getId(), row.getStepInstance().getId());
             assertEquals(completedAt, row.getProcessBy());
             assertEquals(completedAt, row.getNextAttemptAt());
             // Applying it is the other service's job, as with every other row.
@@ -218,7 +218,7 @@ class StepSlaScheduleServiceTest {
     private static StepSlaStateTransition row(UUID stepId, SlaTransitionType type, OffsetDateTime processBy) {
         return StepSlaStateTransition.builder()
                 .id(UUID.randomUUID())
-                .stepInstanceId(stepId)
+                .stepInstance(StepInstance.builder().id(stepId).build())
                 .transitionType(type)
                 .processBy(processBy)
                 .nextAttemptAt(processBy)

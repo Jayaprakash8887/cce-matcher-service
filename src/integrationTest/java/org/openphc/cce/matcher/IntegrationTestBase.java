@@ -200,7 +200,7 @@ public abstract class IntegrationTestBase {
             return;
         }
         transitionRepository.save(StepSlaStateTransition.builder()
-                .stepInstanceId(step.getId())
+                .stepInstance(step)
                 .transitionType(type)
                 .processBy(processBy)
                 .nextAttemptAt(processBy)

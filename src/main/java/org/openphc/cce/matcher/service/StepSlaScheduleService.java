@@ -14,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Writes each step's SLA schedule into {@code step_sla_state_transition}, and reads it back.
@@ -86,8 +85,8 @@ public class StepSlaScheduleService {
         }
 
         List<StepSlaStateTransition> rows = new ArrayList<>(2);
-        addIfScheduled(rows, step.getId(), SlaTransitionType.DUE_DATE_REACHED, dueDate);
-        addIfScheduled(rows, step.getId(), SlaTransitionType.MISSED_DATE_REACHED, missedDate);
+        addIfScheduled(rows, step, SlaTransitionType.DUE_DATE_REACHED, dueDate);
+        addIfScheduled(rows, step, SlaTransitionType.MISSED_DATE_REACHED, missedDate);
 
         if (rows.isEmpty()) {
             log.debug("Step {} (actionId={}) has no SLA thresholds — nothing scheduled",
@@ -129,7 +128,7 @@ public class StepSlaScheduleService {
         }
 
         transitionRepository.save(StepSlaStateTransition.builder()
-                .stepInstanceId(step.getId())
+                .stepInstance(step)
                 .transitionType(SlaTransitionType.MET_CONDITION_REACHED)
                 .processBy(completedAt)
                 .nextAttemptAt(completedAt)
@@ -139,13 +138,13 @@ public class StepSlaScheduleService {
                 step.getId(), step.getActionId(), completedAt, step.getDueDate());
     }
 
-    private void addIfScheduled(List<StepSlaStateTransition> rows, UUID stepInstanceId,
+    private void addIfScheduled(List<StepSlaStateTransition> rows, StepInstance step,
                                 SlaTransitionType type, OffsetDateTime processBy) {
         if (processBy == null) {
             return;
         }
         rows.add(StepSlaStateTransition.builder()
-                .stepInstanceId(stepInstanceId)
+                .stepInstance(step)
                 .transitionType(type)
                 .processBy(processBy)
                 .nextAttemptAt(processBy)
