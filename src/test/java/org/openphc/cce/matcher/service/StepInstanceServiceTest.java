@@ -687,7 +687,7 @@ class StepInstanceServiceTest {
 
             Deviation deviation = Deviation.builder().id(UUID.randomUUID()).build();
             when(deviationRecorder.recordDeviation(any(), eq(DeviationType.ORDER_VIOLATION), any()))
-                    .thenReturn(new DeviationRecorder.DeviationResult(deviation, true));
+                    .thenReturn(deviation);
 
             service.completeStep(completedStep, UUID.randomUUID(), "test-source", null);
 

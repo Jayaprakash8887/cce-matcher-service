@@ -382,7 +382,7 @@ public class IntelligenceTriggerProducer {
 |---|---|
 | **At-least-once delivery** | `AckMode.RECORD` + `DefaultErrorHandler` + no auto-commit |
 | **Idempotency (inbound events)** | `(cloudeventsId, source)` deduplication in matcher_event_log |
-| **Idempotency (deviations)** | `(step_instance_id, deviation_type)` unique constraint on `deviation`. `recordDeviation` returns a `created` flag so intelligence evaluation only fires for a freshly inserted deviation — no duplicate deviations **and** no duplicate intelligence events under redelivery or concurrent processing |
+| **Idempotency (deviations)** | A redelivered event is caught by the inbound-event check above before it reaches `completeStep`, and `completeStep` refuses a step that is not `NOT_STARTED`, so an `ORDER_VIOLATION` is recorded once per step. The `(step_instance_id, deviation_type)` unique constraint on `deviation` is the backstop: a duplicate fails the event, which is retried and then dead-lettered, rather than publishing a second intelligence event |
 | **Idempotency (producer)** | `enable.idempotence=true` on producer |
 | **Ordering (per partition)** | Key-based routing ensures ordering per action execution |
 | **Transactional reads** | `isolation.level=read_committed` prevents reading uncommitted |

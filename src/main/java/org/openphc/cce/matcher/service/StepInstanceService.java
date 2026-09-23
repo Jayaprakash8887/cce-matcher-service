@@ -3,6 +3,7 @@ package org.openphc.cce.matcher.service;
 import org.openphc.cce.common.sla.SlaThresholdReader;
 import org.openphc.cce.common.deviation.DeviationRecorder;
 import org.openphc.cce.common.intelligence.IntelligenceActionEvaluator;
+import org.openphc.cce.common.entity.Deviation;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.StepInstance;
@@ -253,18 +254,16 @@ public class StepInstanceService {
             // Key kept as-is: it is persisted in deviation.metadata and read downstream.
             metadata.put("completedActionId", completedStepId);
 
-            DeviationRecorder.DeviationResult result = deviationRecorder.recordDeviation(completedStep,
+            // Once per step: completeStep refuses a step that is not NOT_STARTED, so this cannot run
+            // twice for one step.
+            Deviation deviation = deviationRecorder.recordDeviation(completedStep,
                     DeviationType.ORDER_VIOLATION, metadata);
 
-            // Skip the warning + intelligence evaluation if this order violation was already
-            // recorded (idempotent under redelivered / concurrent completion processing).
-            if (result.created()) {
-                log.warn("Order violation detected: step {} (actionId={}) completed while "
-                                + "prerequisite steps {} are still incomplete",
-                        completedStep.getId(), completedStepId, incompletePrerequisites);
+            log.warn("Order violation detected: step {} (actionId={}) completed while "
+                            + "prerequisite steps {} are still incomplete",
+                    completedStep.getId(), completedStepId, incompletePrerequisites);
 
-                intelligenceActionEvaluator.evaluateOnDeviation(completedStep, result.deviation());
-            }
+            intelligenceActionEvaluator.evaluateOnDeviation(completedStep, deviation);
         }
     }
 

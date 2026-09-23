@@ -287,8 +287,7 @@ Matcher records exactly one deviation type: `ORDER_VIOLATION`, detected on compl
 `OVERDUE` and `MISSED` deviations are recorded by the CCE Step SLA Service (§3), which also owns
 intelligence evaluation for them.
 
-> **Intelligence action evaluation** is triggered after the deviation is recorded, and only when it was
-> newly inserted. See §6 for the full intelligence pipeline flow.
+> **Intelligence action evaluation** is triggered after the deviation is recorded. See §6 for the full intelligence pipeline flow.
 
 ```mermaid
 flowchart TD
@@ -296,11 +295,9 @@ flowchart TD
     T2 -->|"type=ORDER_VIOLATION<br/>+ incompletePrerequisites metadata"| RD
 
     RD["DeviationRecorder.recordDeviation()"]
-    RD --> DX{"Deviation of this type<br/>already exists for step?"}
-    DX -->|"Yes (redelivery / concurrent)"| DXR["Return DeviationResult(existing, created=false)<br/>— no insert, caller skips intelligence eval"]
-    DX -->|"No"| D1["Build Deviation: type, detectedAt = now(),<br/>metadata from the caller,<br/>linked to the StepInstance (the enrolment is reached through it)"]
-    D1 --> D6["Persist to DB"]
-    D6 --> D8["Caller evaluates intelligence actions<br/>(IntelligenceActionEvaluator), created=true only"]
+    RD --> D1["Build Deviation: type, detectedAt = now(),<br/>metadata from the caller,<br/>linked to the StepInstance (the enrolment is reached through it)"]
+    D1 --> D6["Persist to DB<br/>(deviation_step_type_key: one per step and type)"]
+    D6 --> D8["Caller evaluates intelligence actions<br/>(IntelligenceActionEvaluator)"]
 ```
 
 ## 6. Intelligence Action Evaluation & Trigger Publishing
