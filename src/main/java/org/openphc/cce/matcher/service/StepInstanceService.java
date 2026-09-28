@@ -152,7 +152,7 @@ public class StepInstanceService {
 
         stepInstanceRepository.save(step);
 
-        // Work recorded before the deadline is a verdict waiting to be written, so schedule it now.
+        // Work recorded by the deadline is a verdict waiting to be written, so schedule it now.
         // The Step SLA Service takes the row on its next cycle; without it, a step completed weeks
         // early would sit unjudged until its due date arrived.
         slaScheduleService.scheduleMetIfOnTime(step, completedAt);

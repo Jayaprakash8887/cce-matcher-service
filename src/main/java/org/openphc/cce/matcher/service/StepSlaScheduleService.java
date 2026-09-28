@@ -100,8 +100,14 @@ public class StepSlaScheduleService {
     }
 
     /**
-     * Record that a step's work was recorded before its due date, as a {@code MET_CONDITION_REACHED}
+     * Record that a step's work was recorded by its due date, as a {@code MET_CONDITION_REACHED}
      * row the Step SLA Service applies on its next cycle.
+     *
+     * <p>"By" is inclusive: work recorded at the due-date instant itself is on time. That case is not
+     * rare. A successor with no timing offset is due at its prerequisite's {@code completed_at}, and a
+     * backfilled prerequisite at the clinical time of the completion that revealed it, so when one
+     * encounter records both steps the two timestamps are identical. Treating that as late marked
+     * those steps OVERDUE.
      *
      * <p>Unlike the deadlines this is not known when the step is created, so it is written here, at the
      * completion. {@code process_by} is the {@code completed_at} that satisfied it — the moment the
@@ -123,7 +129,7 @@ public class StepSlaScheduleService {
         if (!RequiredBehavior.isMandatory(step.getRequiredBehavior())) {
             return;
         }
-        if (step.getDueDate() == null || completedAt == null || !completedAt.isBefore(step.getDueDate())) {
+        if (step.getDueDate() == null || completedAt == null || completedAt.isAfter(step.getDueDate())) {
             return;
         }
 
@@ -134,7 +140,7 @@ public class StepSlaScheduleService {
                 .nextAttemptAt(completedAt)
                 .build());
 
-        log.debug("Step {} (actionId={}) was recorded at {}, before its due date of {} — MET scheduled",
+        log.debug("Step {} (actionId={}) was recorded at {}, by its due date of {} — MET scheduled",
                 step.getId(), step.getActionId(), completedAt, step.getDueDate());
     }
 

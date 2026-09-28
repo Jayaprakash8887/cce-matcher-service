@@ -76,7 +76,7 @@ two: they meet on one table in the shared database, with one writer per column.
 happened, and when — and the Step SLA Service owns every judgement of timeliness made from it. The two
 never write the same column. Concretely, Matcher writes `step_status` and `completed_at` and never
 `sla_status`; it inserts the transition rows — the two deadlines at creation, and a
-`MET_CONDITION_REACHED` at a completion that beat the due date — and never touches one again. Step SLA
+`MET_CONDITION_REACHED` at a completion on or before the due date — and never touches one again. Step SLA
 reads that `completed_at` and settles the SLA from it when each row comes round.
 
 `ORDER_VIOLATION` deviations stay in this service, because they are detected from the event itself at
@@ -550,7 +550,7 @@ Both state machines, and why the two columns are separate, are in `cce-common-ut
 [Architecture Overview §4](../../cce-common-util/docs/architecture-overview.md#4-step-status-and-sla-status).
 What follows is what *this* service does within them.
 
-**Scheduling the SLA verdict on completion:** this service writes no `sla_status`, ever. What it does at completion is schedule the one verdict that has become answerable — when the event beat `dueDate`, `StepSlaScheduleService.scheduleMetIfOnTime` writes a `MET_CONDITION_REACHED` row with `process_by` set to that `completed_at`, so the Step SLA Service records `MET` within a cycle instead of at a deadline weeks away. A completion that did not beat the due date schedules nothing: the step's own deadline rows are already there to catch it, and it keeps whatever they reached — `OVERDUE` past the due date, `MISSED` past the missed date — so one row states both that the work was done and that it was late. Timing is judged against the **clinical occurrence time** of the completing event (see §4.2), not the ingestion time, so an act that happened on time but reported late is still `MET`.
+**Scheduling the SLA verdict on completion:** this service writes no `sla_status`, ever. What it does at completion is schedule the one verdict that has become answerable — when the event landed on or before `dueDate` (inclusive: at the instant counts), `StepSlaScheduleService.scheduleMetIfOnTime` writes a `MET_CONDITION_REACHED` row with `process_by` set to that `completed_at`, so the Step SLA Service records `MET` within a cycle instead of at a deadline weeks away. A completion after the due date schedules nothing: the step's own deadline rows are already there to catch it, and it keeps whatever they reached — `OVERDUE` past the due date, `MISSED` past the missed date — so one row states both that the work was done and that it was late. Timing is judged against the **clinical occurrence time** of the completing event (see §4.2), not the ingestion time, so an act that happened on time but reported late is still `MET`.
 
 **Completability** depends on `step_status` alone. A step whose SLA is already `MISSED` is still completable by a late event; the previous model treated `MISSED` as terminal, so a late event created a second row instead of recording the arrival against the step that was actually missed.
 

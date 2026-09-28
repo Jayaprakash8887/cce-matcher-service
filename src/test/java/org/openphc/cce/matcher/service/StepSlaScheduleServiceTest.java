@@ -167,13 +167,28 @@ class StepSlaScheduleServiceTest {
         }
 
         @Test
-        void completionExactlyAtTheDueDate_schedulesNothing() {
-            // Same boundary the Step SLA Service judges on: at the deadline is not before it.
+        void completionExactlyAtTheDueDate_schedulesMet() {
+            // Work recorded at the deadline instant is on time — the same inclusive boundary the Step
+            // SLA Service judges on. A zero-offset successor completed by the encounter that completed
+            // its prerequisite lands exactly here.
             StepInstance step = buildStep();
             OffsetDateTime due = OffsetDateTime.now(ZoneOffset.UTC).plusDays(1);
             step.setDueDate(due);
 
             service.scheduleMetIfOnTime(step, due);
+
+            StepSlaStateTransition row = captureSavedRow();
+            assertEquals(SlaTransitionType.MET_CONDITION_REACHED, row.getTransitionType());
+            assertEquals(due, row.getProcessBy());
+        }
+
+        @Test
+        void completionOneMicrosecondAfterTheDueDate_schedulesNothing() {
+            StepInstance step = buildStep();
+            OffsetDateTime due = OffsetDateTime.now(ZoneOffset.UTC).minusDays(1);
+            step.setDueDate(due);
+
+            service.scheduleMetIfOnTime(step, due.plusNanos(1_000));
 
             verify(transitionRepository, never()).save(any());
         }
