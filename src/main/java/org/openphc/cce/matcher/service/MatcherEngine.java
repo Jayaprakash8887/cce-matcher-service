@@ -115,9 +115,12 @@ public class MatcherEngine {
     private void doProcessInboundEvent(CloudEventMessage event) {
         eventsProcessedCounter.increment();
 
+        // A redelivered or resent event is already in the log under the same (cloudevents_id, source),
+        // which is unique, so a second row cannot be written: inserting one threw, the listener retried
+        // the same insert, and the event ended up dead-lettered. The first row is the record of the
+        // event; a repeat is only counted.
         if (eventLogService.isDuplicate(event.getId(), event.getSource())) {
             log.info("Duplicate event detected: cloudeventsId={}, source={}", event.getId(), event.getSource());
-            eventLogService.recordEvent(event, ProcessingStatus.DUPLICATE);
             eventsDuplicateCounter.increment();
             return;
         }
