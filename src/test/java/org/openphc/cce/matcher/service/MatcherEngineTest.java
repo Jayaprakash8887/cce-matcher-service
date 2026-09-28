@@ -75,15 +75,15 @@ class MatcherEngineTest {
     class DuplicateEvent {
 
         @Test
-        void duplicateEvent_skipProcessing_duplicateStatus() {
+        void duplicateEvent_skipsProcessing_andWritesNoSecondLogRow() {
+            // (cloudevents_id, source) is unique in matcher_event_log, so a second row for the same
+            // event would violate it and send the event round the retry loop to the dead-letter topic.
             CloudEventMessage event = buildEvent();
             when(eventLogService.isDuplicate(event.getId(), event.getSource())).thenReturn(true);
-            when(eventLogService.recordEvent(event, ProcessingStatus.DUPLICATE))
-                    .thenReturn(buildEventLog(ProcessingStatus.DUPLICATE));
 
             engine.processInboundEvent(event);
 
-            verify(eventLogService).recordEvent(event, ProcessingStatus.DUPLICATE);
+            verify(eventLogService, never()).recordEvent(any(), any());
             verify(triggerMatchingService, never()).findStructuralMatches(any(), any());
             verify(stepInstanceService, never()).completeStep(any(), any(), any(), any());
 
@@ -480,8 +480,6 @@ class MatcherEngineTest {
         void metricsAreRecordedForProcessedEvents() {
             CloudEventMessage event = buildEvent();
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(true);
-            when(eventLogService.recordEvent(event, ProcessingStatus.DUPLICATE))
-                    .thenReturn(buildEventLog(ProcessingStatus.DUPLICATE));
 
             engine.processInboundEvent(event);
 

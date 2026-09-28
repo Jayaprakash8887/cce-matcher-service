@@ -60,7 +60,7 @@ been processed.
 |------|------|---------|
 | Primary Key | `matcher_event_log_pkey` | `id` |
 | Unique | `matcher_event_log_cloudevents_id_source_key` | `(cloudevents_id, source)` — Idempotency guard. |
-| Check | — | `processing_status IN ('MATCHED', 'ZERO_MATCH', 'DUPLICATE')` |
+| Check | — | `processing_status IN ('MATCHED', 'ZERO_MATCH', 'DUPLICATE')`. `DUPLICATE` is no longer written: a repeat of a logged event is only counted (`cce.events.duplicate`), since a second row would violate the unique key above. The value stays admitted for rows written before that. |
 
 ### Design Notes
 
