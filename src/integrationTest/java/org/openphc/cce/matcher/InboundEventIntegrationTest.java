@@ -2,6 +2,8 @@ package org.openphc.cce.matcher;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.openphc.cce.matcher.domain.entity.MatcherEventLog;
@@ -46,6 +48,9 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
     @Autowired
     private StepInstanceRepository stepInstanceRepository;
 
+    @Autowired
+    private MeterRegistry meterRegistry;
+
     @Value("${cce.kafka.topics.inbound-events}")
     private String inboundTopic;
 
@@ -88,7 +93,7 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
     }
 
     @Test
-    void duplicateEvent_recordedAsDuplicate() {
+    void duplicateEvent_countedWithoutSecondLogRow() {
         String eventId = "dup-" + UUID.randomUUID();
         String patientId = "patient-dup-" + UUID.randomUUID();
 
@@ -104,16 +109,25 @@ class InboundEventIntegrationTest extends IntegrationTestBase {
             assertThat(logs).isNotEmpty();
         });
 
+        Counter duplicates = meterRegistry.get("cce.events.duplicate").counter();
+        double duplicatesBefore = duplicates.count();
+
         // Send duplicate
         kafkaTemplate.send(inboundTopic, event);
 
-        await().atMost(30, SECONDS).untilAsserted(() -> {
-            List<MatcherEventLog> logs = eventLogRepository.findAll().stream()
-                    .filter(el -> eventId.equals(el.getCloudeventsId())
-                            && el.getProcessingStatus() == ProcessingStatus.DUPLICATE)
-                    .toList();
-            assertThat(logs).isNotEmpty();
-        });
+        // (cloudevents_id, source) is unique in matcher_event_log, so a repeat is only counted.
+        await().atMost(30, SECONDS).untilAsserted(() ->
+                assertThat(duplicates.count()).isGreaterThan(duplicatesBefore));
+
+        List<MatcherEventLog> logs = eventLogRepository.findAll().stream()
+                .filter(el -> eventId.equals(el.getCloudeventsId()))
+                .toList();
+        assertThat(logs).hasSize(1);
+        assertThat(logs.get(0).getProcessingStatus()).isNotEqualTo(ProcessingStatus.DUPLICATE);
+
+        List<ProtocolInstance> instances = protocolInstanceRepository.findAll().stream()
+                .filter(p -> patientId.equals(p.getPatientId())).toList();
+        assertThat(instances).hasSize(1);
     }
 
     @Test
