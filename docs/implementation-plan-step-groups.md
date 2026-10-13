@@ -4,7 +4,7 @@
 **Based on:** [design-repeating-step-groups.md](design-repeating-step-groups.md) (the design), the decisions in §1, and the points in §2 with their status, as of 2026-10-13. Question ids (A1–E6) are the design's.
 **Baseline:** CCE 2.0.0 (`release-2.0.0` of `cce-common-util`, `cce-matcher-service`, `cce-step-sla-service`, `cce-protocol-service`, `cce-data-pipeline`, `cce-insights-service`).
 
-**Approach.** Phase 1 builds the whole data model; later phases add behaviour. A phase that adds something an author writes in a PlanDefinition is switched on by lifting a load-time check in the protocol service. Until that phase ships, a PlanDefinition that uses its feature is refused at load, so no feature can be half-active in production. Behaviour with no such switch, such as phase 2's closure of one-off groups, reaches production only with phases 1–3. The one exception is intelligence on step `OVERDUE` / `MISSED` (phase 6), which applies to protocols already loaded (§5). Phases 1–3 are all required before production, together with the data-pipeline, insights-service and insights-ui updates for them, which are taken up after phase 3 (§4.4). Protocols without groups behave exactly as today throughout.
+**Approach.** Phase 1 builds the whole data model; later phases add behaviour. A phase that adds something an author writes in a PlanDefinition is switched on by lifting a load-time check in the protocol service. Until that phase ships, a PlanDefinition that uses its feature is refused at load, so no feature can be half-active in production. Two kinds of behaviour have no such switch: phase 2's closure of one-off groups, which reaches production only with phases 1–3, and intelligence on step `OVERDUE` / `MISSED` (phase 6), which applies to protocols already loaded (§5). Phases 1–3 are all required before production, together with the data-pipeline, insights-service and insights-ui updates for them, which are taken up after phase 3 (§4.4). Protocols without groups behave exactly as today throughout.
 
 ---
 
@@ -23,26 +23,26 @@
 | B5 | (a) Hand-off row | Step-sla writes a row that the matcher drains. Only the matcher creates steps and schedules deadlines. |
 | B6 | (a) Nearest due date | `findActionableStep` picks the open row whose due date is nearest the event's clinical time. |
 | C1 | (b) Warn | A step deadline under a group deadline is logged as a warning at load. The group's deadline applies; the step's `tolerance-days` is ignored. |
-| C2 | (a) Require deadlines | Every mandatory step under a scheduled repeating group needs `tolerance-days` at some level, so that it can be written off, checked at load. Visit-driven groups are exempt (point 3). Its reason in the design no longer holds under B4 (point 20). |
+| C2 | Dropped (was (a)) | No load check. A mandatory step under a scheduled group may have no `tolerance-days`: it then goes `OVERDUE` but is never written off, so its cycle stays open, and under B4 the next cycle opens anyway (point 20). |
 | C3 | (b) Runbook step | The Event Replay runbook gains a group-specific step (§4.3). |
 | D1 | (a) Nullable reference | `step_sla_state_transition`, `deviation` and `intelligence_event_log` gain `step_group_instance_id`. Exactly one of the step and group references is set. |
 | D2 | Calculate | Only facts are stored: `opened_at`, `completed_at`, `closed_at`, `sla_status`. |
 | D3 | Deferred | Not in this release. Protocol instances stay `ACTIVE`, as in 2.0.0 today. The group completion logic is written so protocol completion can reuse it later. |
 | D4 | As proposed | The rule context gains `groupActionId` and `cycleIndex`. |
-| D5 | Yes | Group reporting in insights in this release. Scope: point 15. |
+| D5 | Yes | Group reporting in insights: occurrences in the first production release (after phase 3), verdicts in phase 5. Scope: point 15. |
 | D7 | `step_group_instance` | Table and column names as in the design. |
 | E1 | `all` only | `selectionBehavior` absent or `all`; other values rejected at load. |
 | E2 | Scenario 1 (b), scenario 2 (b) | A group whose predecessor is a group opens when that predecessor closes. A top-level group with no predecessor opens when one of its steps is first matched. |
 | E3 | (b) | Opening a visit's cycle closes the previous visit's cycle, as incomplete. |
 | E4 | Yes, on deviations | A group's `fire-event` actions fire on the group's deviations. The matcher evaluates them through a hand-off from step-sla, which also switches on intelligence for step `OVERDUE` / `MISSED` (point 13). |
 | E5 | (b) Fill in later | A group opened before its due date can be worked out gets the due date, and its deadline rows, when its predecessor completes, or closes if the predecessor is a group (point 8). |
-| E6 | (a) Require a predecessor | A top-level scheduled repeating group must have a `relatedAction` predecessor, checked at load. |
+| E6 | (a) Require a predecessor | A scheduled repeating group, always top-level (point 23), must have a `relatedAction` predecessor, checked at load. |
 
 ---
 
 ## 2. Points the decisions left open
 
-The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–25, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
+The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–26, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
 - ***Decided:*** settled by an explicit decision.
 - ***Accepted proposal:*** an engineering detail whose proposal stands unless a reviewer objects.
 - ***Open:*** no answer yet.
@@ -51,7 +51,7 @@ The decisions in §1 left some cases open: places where two decisions conflicted
 |---|---|---|---|
 | 1 | When the next scheduled cycle is due | Decided | 2 |
 | 2 | A scheduled cycle with nothing to count from | Decided | 2 |
-| 3 | The deadline rule (C2) would reject the Rwanda journey | Decided | 2, 3 |
+| 3 | The deadline rule (C2) would reject the Rwanda journey | Fell away: C2 is dropped | — |
 | 4 | Which time zone a calendar day is in | Decided | 3 |
 | 5 | How a group says what starts a new cycle | Decided | 3 |
 | 6 | Late events dated to an earlier day | Accepted proposal | 3 |
@@ -73,7 +73,8 @@ The decisions in §1 left some cases open: places where two decisions conflicted
 | 22 | `closed_at` when an occurrence closes without completing | Accepted proposal | 2–4 |
 | 23 | Which repeating groups may nest inside which | Decided | 2, 3 |
 | 24 | Withdrawn enrollments | Decided | 2 |
-| 25 | An event for a step already completed in an open occurrence | Accepted proposal | 1, 2 |
+| 25 | An event for a step already completed in its occurrence | Accepted proposal | 1–3 |
+| 26 | What opens a `calendar-day` cycle | Decided | 3 |
 
 **1. When is the next scheduled cycle due?** *(B4; blocks phase 2)*
 B4 settles when the next cycle opens (point 20), but the design left its due date open. Example: quarterly review, cycle 0 due 10 Jan, its work finished on 25 Feb. Cycle 1 is due either 10 Apr (fixed calendar) or 25 May (3 months after the work).
@@ -83,9 +84,8 @@ B4 settles when the next cycle opens (point 20), but the design left its due dat
 E6 requires a predecessor so that cycle 0 has a due date. But a group still opens early if one of its steps is matched before the predecessor completes. Its due date then waits for E5's fill-in, and if the predecessor never completes, it never gets one. Example: a quarterly review due "1 week after diagnosis". The patient's first vitals arrive on 10 Jan, and the diagnosis is never recorded. When cycle 1 is to open, the fixed calendar has nothing to count from, and `boundsDuration` has no start.
 *Decided:* when cycle 0 has no due date, count the cadence and `boundsDuration` from its `opened_at`. A starting point for counting is not a deadline, so cycle 0 still isn't judged late.
 
-**3. C2 would reject the Rwanda journey.** *(C2 + E3; blocks phases 2 and 3)*
-C2 requires a deadline on every mandatory step under a repeating group. The Rwanda journey is a repeating group with no deadlines at all; its cycles close through E3 instead. Applied to every repeating group, C2 would refuse that protocol.
-*Decided:* apply C2 to scheduled repeats only. A visit-driven cycle closes when the next one opens (E3), so it doesn't need deadlines to close.
+**3. C2 would reject the Rwanda journey.** *(C2 + E3)*
+No longer needed now: C2 is dropped (§1). Visit-driven cycles close through E3, and scheduled ones open on schedule whatever state the previous cycle is in (point 20).
 
 **4. Calendar day in which time zone?** *(B2; blocks phase 3)*
 Event times are stored in UTC. A check-in at 23:30 UTC on 3 Mar is 01:30 on 4 Mar in Kigali, so the time zone decides which visit it belongs to.
@@ -122,7 +122,7 @@ ANC visit 3 is due "6 weeks after visit 2". Visit 2 is written off at 22 weeks w
 
 **8. E5 fill-in edge cases.** *(E5; blocks phases 2 and 4)*
 - **The group has already finished.** If the predecessor completes after the group is already complete or closed, a deadline filled in afterwards would judge finished work. *Accepted proposal:* fill in only while the group is open and not complete.
-- **Steps created with the group.** Steps created when the group opened take the group's due date. While that is unknown they get none, and so no deadline either, and C2's load check doesn't hold at runtime. *Accepted proposal:* fill in those steps' due dates and deadlines at the same moment, for steps that still have none. This bends the write-once rule for step due dates as well as group ones.
+- **Steps created with the group.** Steps created when the group opened take the group's due date. While that is unknown they get none, and so no deadline either: they can't go `OVERDUE` or be written off. *Accepted proposal:* fill in those steps' due dates and deadlines at the same moment, for steps that still have none. This bends the write-once rule for step due dates as well as group ones.
 - **A predecessor that is a group.** A group can close without completing (point 7), so a follower opened early would never get its due date. *Accepted proposal:* fill in when a group predecessor closes too, counting from its `closed_at`.
 - **Two halves.** Phase 2 fills in the due dates (the group's and its steps') and the steps' deadline rows, so a group opened early still closes. Phase 4 writes the group's own deadline rows at that moment.
 
@@ -167,8 +167,8 @@ The column is `NOT NULL`, and a group has no `step_status`.
 *Accepted proposal:* make it nullable.
 
 **17. Events after a scheduled group has stopped.** *(B4; blocks phase 2)*
-A quarterly review with `count: 4` has had its four cycles. A fifth set of vitals arrives. Opening a fifth cycle would go past what the protocol asked for.
-*Accepted proposal:* the step is recorded, with no group, so the work is kept but no new cycle opens. This is the rule in the design's §7.3.
+A quarterly review with `count: 4` has had its four cycles, and the last has closed. A fifth set of vitals arrives. Opening a fifth cycle would go past what the protocol asked for.
+*Accepted proposal:* the step is recorded, with no group, so the work is kept but no new cycle opens. This is the rule in the design's §7.3. While the last cycle is still open, it takes the event instead (point 25).
 
 **18. Order violations and backfill across cycles.** *(B1 + B4 + E3; blocks phases 1 and 2)*
 `detectOrderViolations`, `backfillMissingMandatorySteps` and the fan-in wait in `createDependentSteps` look a predecessor up by its action id across the whole enrollment. Once a group repeats, one cycle sees another's rows. Say a prescription follows an examination in the Rwanda journey. On 3 Mar the examination isn't recorded, and the visit closes under E3 with it still `NOT_STARTED`. On 17 Mar both are recorded in order, but the 3 Mar row is still outstanding, so the prescription raises an `ORDER_VIOLATION`. The other way round, a predecessor missing from the 17 Mar visit isn't backfilled, because the 3 Mar visit has a row for it.
@@ -192,37 +192,48 @@ B4 opens a scheduled cycle on its schedule, whatever state the previous one is i
 - **§7.5, step 1:** "the next cycle opens when cycle N closes, or when it completes" no longer holds; the rules above replace it. Steps 2–5 stand, with the stop checks run when the next cycle is scheduled, and the fixed-calendar examples still hold.
 - **B4:** the design proposed open on closure. In its scenario, cycle 1 now opens on 10 Jan, when cycle 0 falls due, and is due 10 Apr. The reviews carry on whether cycle 0's HbA1c is done late, written off, or never settled.
 - **B5:** a verdict no longer opens the next scheduled cycle. The hand-off is still needed: a write-off can still close an occurrence, and what follows a closed group opens then (point 7), as ANC visit 3 does after visit 2 is written off.
-- **C2:** its scenario, where an HbA1c that can never be written off stops the reviews, assumed open on closure. Under open on schedule the reviews go on, and only that cycle stays open. C2 stays decided as (a) until it is revisited.
+- **C2:** its scenario, where an HbA1c that can never be written off stops the reviews, assumed open on closure. Under open on schedule the reviews go on, and only that cycle stays open. C2 is dropped (§1).
 
 **21. A repeating group as a member of its parent.** *(B1 + B4; blocks phases 1–3)*
 A Rwanda visit holds a Consultation that can repeat within the visit (point 5). The visit is complete when its mandatory members are done, but nothing said when a member that repeats is done, or settled.
 *Decided:*
 - done once any of its cycles in the parent occurrence is complete. A visit with two Consultations, one complete, is complete once its other mandatory members are. Phase 1's `StepGroupService` already counts it this way;
-- settled once every cycle opened in the parent occurrence is closed. A scheduled group that is still running always has an open cycle, so it never settles, and its parent closes only by completing, by its own deadline (phase 4) or by E3.
+- settled once every cycle opened in the parent occurrence is closed.
+
+Only visit-driven groups can repeat inside a parent: a scheduled group is always top-level (point 23).
 
 **22. `closed_at` when an occurrence closes without completing.** *(D2 + E3; blocks phases 2–4)*
 Point 7 counts what follows a closed group from its `closed_at`. If `closed_at` were the moment the hand-off poller happened to run, those due dates would shift with poll timing.
 *Accepted proposal:* `closed_at` is always a clinical or planned time, never a processing time:
-- written off through its members (phase 2): the missed date of the verdict that settled the last member;
+- closed through its members (phase 2): the latest time a mandatory member settled, which is a completion's clinical time, a write-off's missed date, or a nested group's `closed_at`;
 - written off by its own deadline (phase 4): the group's missed date;
 - closed by E3 (phase 3): the `opened_at` of the cycle whose opening closed it;
-- closed with its parent (phase 3): the parent's `closed_at`.
+- closed with its parent (phase 3): the parent's `closed_at`;
+- created already closed (point 6): its own `opened_at`.
 
 A complete occurrence's `closed_at` stays its `completed_at`.
 
 **23. Which repeating groups may nest inside which.** *(B1 + B3 + B4; blocks phases 2 and 3)*
-Point 5 gives an inner group `entry-step`, but nothing stopped a `calendar-day` group inside a visit, where every event falls on the same day, or a scheduled group inside a visit, whose schedule would restart with every visit. Point 20's cycle poller could also open a cycle inside a parent occurrence that has already closed.
+Point 5 gives an inner group `entry-step`, but nothing stopped a `calendar-day` group inside a visit, where every event falls on the same day, or a scheduled group inside any group. A scheduled group inside a visit would restart its schedule with every visit. Inside a one-off group it would clash with point 21: the parent would be complete, and so closed, once one review cycle was done, and no further cycle could open inside it.
 *Decided:*
-- a repeating group inside another repeating group uses `cycle-boundary` `entry-step`; any other kind there is rejected at load. A repeating group inside a one-off group is allowed;
-- the cycle poller never opens a cycle inside a closed parent occurrence; it drops the schedule row instead.
+- a scheduled group is always top-level; nested, it is rejected at load. No current protocol needs one;
+- a repeating group inside another repeating group uses `cycle-boundary` `entry-step`; a `calendar-day` group there is rejected at load. A visit-driven group inside a one-off group is allowed.
 
 **24. Withdrawn enrollments.** *(B4; blocks phase 2)*
 `ProtocolInstanceStatus` has `WITHDRAWN`. Point 20's schedule would keep opening cycles for a withdrawn patient, each with its own deadlines and `MISSED` deviations, and an open-ended one would never stop.
 *Decided:* the cycle poller drops the schedule rows of an enrollment that isn't `ACTIVE`.
 
-**25. An event for a step already completed in an open occurrence.** *(B6; blocks phases 1 and 2)*
+**25. An event for a step already completed in its occurrence.** *(B6; blocks phases 1–3)*
 A second set of vitals arrives during a quarterly cycle whose vitals row is already completed. No open row awaits it (B6), so it is recorded as a new step.
-*Accepted proposal:* it becomes a further completed row in the open occurrence whose due date is nearest its clinical time, as a repeated event outside a group adds a row today. It changes nothing about completion and creates no step the occurrence already has. In phase 1 a group has one occurrence, which takes it; from phase 2, with two cycles open, the nearest one does.
+*Accepted proposal:* it becomes a further completed row, as a repeated event outside a group adds a row today. It changes nothing about completion and creates no step the occurrence already has. The occurrence that takes it:
+- a one-off group: its single occurrence, even once complete and closed; nothing is created inside a closed one (A2);
+- a scheduled group: the open cycle whose due date is nearest the event's clinical time (phase 2);
+- an `entry-step` group: a repeated entry step opens a new cycle instead (point 5); any other step joins the current cycle (phase 3);
+- a `calendar-day` group: the cycle for the event's day (point 12).
+
+**26. What opens a `calendar-day` cycle.** *(B2 + E2; blocks phase 3)*
+Phase 1 opens a group in advance when its predecessor completes, or when its parent opens. For a `calendar-day` journey that follows registration, that would open a cycle on the registration day (point 6). If the first visit comes on another day, it opens a new cycle and E3 closes the first one, empty and incomplete, and reports show a visit that never happened.
+*Decided:* only an event for one of its steps opens a `calendar-day` cycle. A predecessor completing, or its parent opening, opens none. An `entry-step` group, such as the Consultation inside a visit, still opens in advance as other groups do.
 
 ---
 
@@ -231,8 +242,8 @@ A second set of vitals arrives during a quarterly cycle whose vitals row is alre
 | Phase | Delivers | Needs | Repos |
 |---|---|---|---|
 | 1. Foundation | One-off and nested groups, completion, all schema changes, B6 row ordering | A3, B6, D1, D2, D7, E1, E2 (scenario 2); points 11, 12, 16, 18, 19, 21, 25 | common-util, matcher, protocol |
-| 2. Closure and scheduled repeats | Closure, what follows a closed group, the hand-off, E5's due-date fill-in, the quarterly review | B4, B5, C2, E2 (scenario 1), E5 (due dates), E6; points 1–3, 7, 8, 17, 18, 20–25 | common-util, matcher, step-sla, protocol |
-| 3. Visit-driven and nested repeats | The Rwanda journey; closing nested occurrences with their parent | B1, B2, B3, E3; points 3–6, 18, 21–23 | common-util, matcher, protocol |
+| 2. Closure and scheduled repeats | Closure, what follows a closed group, the hand-off, E5's due-date fill-in, the quarterly review | B4, B5, E2 (scenario 1), E5 (due dates), E6; points 1, 2, 7, 8, 17, 18, 20–25 | common-util, matcher, step-sla, protocol |
+| 3. Visit-driven and nested repeats | The Rwanda journey; closing nested occurrences with their parent | B1, B2, B3, E3; points 4–6, 18, 21–23, 25, 26 | common-util, matcher, protocol |
 | After 3. Reporting for production | The pipeline for the new table and columns; occurrence and cycle reports; the patient timeline | D5; point 15 | pipeline, insights, insights-ui |
 | 4. Group deadlines | Group verdicts and deviations, closure by a group's write-off | A1, C1, E5 (deadline rows); points 8–10, 22 | common-util, matcher, step-sla, protocol |
 | 5. Group verdict reporting | Group `MET` / `OVERDUE` / `MISSED` in reports, without intelligence | A2, D5; point 15 | pipeline, insights, insights-ui |
@@ -350,7 +361,7 @@ ALTER TABLE intelligence_event_log
 - E5's fill-in of due dates.
 - The hand-off from step-sla to the matcher, for a grouped step written off.
 - Scheduled repeats: the quarterly review. Each cycle opens on its schedule, not on the previous cycle's closure (B4, point 20).
-- Deadlines stay on steps. A group's `tolerance-days` stays gated until phase 4, so C2 is met by the steps' `tolerance-days` only.
+- Deadlines stay on steps; a group's `tolerance-days` stays gated until phase 4.
 
 **`cce-matcher-service`**
 - **Migration `V9`:** an internal hand-off table, `sla_handoff`, with one row per deviation the matcher must act on:
@@ -366,8 +377,9 @@ ALTER TABLE intelligence_event_log
 - **E5 fill-in** when a predecessor completes, or when a predecessor that is a group closes (point 8): the group's due date, and the due dates and deadline rows of the steps created with it that have none. The group's own deadline rows wait for phase 4.
 - **Hand-off poller:** claims `sla_handoff` rows with `FOR UPDATE SKIP LOCKED`, takes the `protocol_instance` lock, recomputes closure, and opens what follows.
 - **Scheduling the next cycle** (point 20): when a cycle opens, compute the next due date (points 1 and 2) and apply the stop checks: `count`, then bounds (`boundsDuration` end excluded, `boundsPeriod.end` included). If the group goes on, write a `group_cycle_schedule` row with `open_at` set to this cycle's due date, or its `opened_at` if it has none.
-- **Cycle poller:** claims due `group_cycle_schedule` rows with `FOR UPDATE SKIP LOCKED`, takes the `protocol_instance` lock, and opens the next cycle, which schedules the one after it. It drops the row instead when the enrollment isn't `ACTIVE` (point 24) or the cycle's parent occurrence has closed (point 23).
-- **After the group stops:** a step event that arrives after the group has stopped is recorded with no group (point 17).
+- **Cycle poller:** claims due `group_cycle_schedule` rows with `FOR UPDATE SKIP LOCKED`, takes the `protocol_instance` lock, and opens the next cycle, which schedules the one after it. It drops the row instead when the enrollment isn't `ACTIVE` (point 24).
+- **Monitoring:** both pollers log an error once a row has failed repeatedly, as step-sla does for its transition rows, and expose how many rows are waiting. A stuck hand-off row leaves a group open; a stuck schedule row stops a schedule silently.
+- **After the group stops:** a step event that arrives once the group has stopped and its last cycle has closed is recorded with no group (point 17).
 - **An event with no open row** goes to the open cycle whose due date is nearest its clinical time (point 25).
 
 **`cce-step-sla-service`**
@@ -380,17 +392,17 @@ ALTER TABLE intelligence_event_log
 - Lift the gate on group `timing`, with these load checks:
   - the timing is a `Timing` with `period` and `periodUnit`;
   - it uses only fields CCE reads, and only supported units (design §5.3);
-  - a top-level scheduled group has a `relatedAction` predecessor (E6);
-  - it has no repeating group around it (point 23);
-  - every mandatory step under it has `tolerance-days` (C2, point 3). A due date alone makes a step `OVERDUE` but never `MISSED`, so without it the step can't be written off. Until phase 4 lifts the gate on group `tolerance-days`, it can only be on the step.
+  - the group is top-level (point 23);
+  - it has a `relatedAction` predecessor (E6).
 
 **Tests.**
 - **Closure:** by write-off, opening what follows with the point 7 due date; by the last unsettled member completing after the others were written off; late work after closure sets `completed_at` only.
 - **What follows a group:** after-end from a closed group (point 7).
 - **E5:** fill-in on a predecessor's completion and on a group predecessor's closure, and point 8's edge cases.
-- **Scheduled repeats:** the design's §7.5 examples table, row by row; the next cycle opens on schedule whether the previous one is complete, closed or still open; two open cycles, with events going to the nearest (B6); point 2's fallback; point 17; a withdrawn enrollment, and a closed parent, open no further cycle (points 23 and 24); a cycle is scheduled once.
+- **Scheduled repeats:** the design's §7.5 examples table, row by row; the next cycle opens on schedule whether the previous one is complete, closed or still open; two open cycles, with events going to the nearest (B6); point 2's fallback; point 17; a withdrawn enrollment opens no further cycle (point 24); a cycle is scheduled once; a nested scheduled group is rejected at load (point 23).
 - **Order violations:** a step in a closed cycle doesn't count as outstanding (point 18).
 - **Hand-off:** writing it twice for one deviation leaves one row.
+- **Monitoring:** a row that keeps failing is logged as an error.
 - **Concurrency:** a matcher-versus-step-sla race on one database (integration test).
 
 ### Phase 3: Visit-driven and nested repeats
@@ -398,11 +410,10 @@ ALTER TABLE intelligence_event_log
 **Load checks.**
 - Accept the `cycle-boundary` extension, with `calendar-day` or `entry-step` (point 5).
 - A group has either `timingTiming.repeat` or `cycle-boundary`, not both.
-- C2 doesn't apply to groups with `cycle-boundary` (point 3).
-- A repeating group inside another repeating group uses `entry-step`; a `calendar-day` or scheduled group there is rejected (point 23).
+- A repeating group inside another repeating group uses `entry-step`; a `calendar-day` group there is rejected (point 23).
 
 **Matcher.**
-- **`calendar-day`:** the event's clinical day, in the configured zone (point 4), selects the occurrence. Earlier-day events follow point 6.
+- **`calendar-day`:** the event's clinical day, in the configured zone (point 4), selects the occurrence. Earlier-day events follow point 6. Only an event opens a cycle; a predecessor completing, or the parent opening, opens none (point 26).
 - **`entry-step`:** a new cycle opens when an entry step repeats after it's already completed in the current cycle (point 5).
 - **E3:** opening a cycle closes the earlier open cycles of the same group, as incomplete: for `calendar-day`, those for earlier days (point 6); for `entry-step`, the previous cycle. Its `closed_at` is the new cycle's `opened_at` (point 22).
 - **Inner repeats:** numbered within their parent occurrence.
@@ -417,6 +428,8 @@ ALTER TABLE intelligence_event_log
 - Two Consultations in one visit.
 - Closing a visit closes its open Consultation.
 - A `calendar-day` group inside a visit is rejected at load.
+- A `calendar-day` journey following registration opens no cycle until the first visit (point 26).
+- A repeated history opens a second Consultation; a repeated examination joins the current one (point 25).
 - Point 18's example: an examination left undone in an earlier visit raises no order violation in a later one.
 
 ### After phase 3: reporting for production
@@ -450,7 +463,7 @@ Taken up once phase 3 is implemented. Together with phases 1–3, it makes up th
 
 **`cce-matcher-service`**
 - **`StepSlaScheduleService`:**
-  - when a group with `tolerance-days` opens with a known due date, write its `DUE_DATE_REACHED` and `MISSED_DATE_REACHED` rows, for every cycle of a repeating group;
+  - when a group with `tolerance-days` opens with a known due date, write its `DUE_DATE_REACHED` and `MISSED_DATE_REACHED` rows, for every cycle of a scheduled group;
   - when phase 2's E5 fill-in sets a group's due date, write those rows then, under point 8's conditions;
   - write no SLA rows for steps under a group deadline;
   - write the group's `MET_CONDITION_REACHED` row when it completes on time.
@@ -467,7 +480,6 @@ Taken up once phase 3 is implemented. Together with phases 1–3, it makes up th
 
 **`cce-protocol-service`**
 - Lift the gate on group `tolerance-days`.
-- Let C2 be met by `tolerance-days` on the group as well as on the step.
 - Warn at load for a step deadline under a group deadline (C1) and for nested group deadlines (point 10).
 - Reject a deadline on a top-level group with no predecessor (point 9).
 
@@ -511,7 +523,7 @@ Starts once the verdict part of point 15 is answered. It adds group verdicts to 
 
 ### 4.1 Concurrency
 
-- **Lock:** every group decision (completion, closure, opening, advancing) runs under the `protocol_instance` lock, taken only when the protocol has groups.
+- **Lock:** every group decision (completion, closure, opening, scheduling the next cycle) runs under the `protocol_instance` lock, taken only when the protocol has groups.
 - **Lock order in the matcher:** the step row first, when completing a step, then `protocol_instance`. Group rows are written only while holding the protocol lock.
 - **Step-sla:** it never takes the protocol lock. It claims the step or group row it judges with `SKIP LOCKED`, writes the verdict, the deviation and any hand-off row, and leaves every group decision to the matcher. It never waits on a lock the matcher holds, so the two can't deadlock.
 
@@ -520,7 +532,7 @@ Starts once the verdict part of point 15 is answered. It adds group verdicts to 
 Each phase updates the documentation it changes:
 - **`cce-common-util/docs/data-dictionary.md`:** the new table and columns, and column ownership.
 - **Architecture overviews:** for the matcher, step-sla, protocol service and common-util.
-- **Deployment guides:** `V8` and `V9`, the hand-off and cycle pollers' settings, and the calendar-zone setting.
+- **Deployment guides:** `V8` and `V9`, the hand-off and cycle pollers' settings and what their errors and backlog mean, and the calendar-zone setting.
 - **A sample PlanDefinition** with groups.
 
 ### 4.3 Operations: Event Replay (C3)
