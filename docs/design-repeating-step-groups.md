@@ -1,5 +1,7 @@
 # Design: Step groups
 
+> **Superseded where decided.** This document is the proposal the customer reviewed, kept unchanged as that record. The questions in §12 have since been decided, and some decisions differ from the proposals here. The decisions, and the further points they settled, are in [implementation-plan-step-groups.md](implementation-plan-step-groups.md) (§1 and §2). Where the two disagree, the implementation plan takes precedence.
+
 **Status:** Proposal. It follows the decisions in [step-group-design-discussion.md](step-group-design-discussion.md). The questions that discussion leaves open are referred to here by its ids (A1–D7); questions this design raises are added as E1–E6 (§12).
 **Baseline:** CCE 2.0.0 (`release-2.0.0` of `cce-common-util`, `cce-matcher-service`, `cce-step-sla-service`, `cce-protocol-service`, `cce-data-pipeline`).
 **Scope:** Add the **step group**: a set of steps that belong together clinically, written in the PlanDefinition as a FHIR grouping action. A group may nest inside another group, may repeat, and may carry its own deadline.
