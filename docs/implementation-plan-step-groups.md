@@ -42,12 +42,30 @@
 
 ## 2. Points the decisions left open
 
-The decisions in §1 left the cases below open. Each point is labelled with its status:
-- ***Decided:*** settled by an explicit decision. Points 1–5, 11 and 13.
-- ***Accepted proposal:*** a detail whose proposal stands unless a reviewer objects. Points 6–10, 12, 16 and 17.
-- ***Open:*** no answer yet. Point 15.
+The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–17, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
+- ***Decided:*** settled by an explicit decision.
+- ***Accepted proposal:*** an engineering detail whose proposal stands unless a reviewer objects.
+- ***Open:*** no answer yet.
 
-Point 14 fell away when protocol completion was deferred. Each point names the phase it affects.
+| # | Point | Status | Phase |
+|---|---|---|---|
+| 1 | When the next scheduled cycle is due | Decided | 4 |
+| 2 | A scheduled cycle with nothing to count from | Decided | 4 |
+| 3 | The deadline rule (C2) would reject the Rwanda journey | Decided | 5 |
+| 4 | Which time zone a calendar day is in | Decided | 5 |
+| 5 | How a group says what starts a new cycle | Decided | 5 |
+| 6 | Late events dated to an earlier day | Accepted proposal | 5 |
+| 7 | The due date of a group opened because its predecessor closed | Accepted proposal | 2 |
+| 8 | Edge cases of filling in a due date later (E5) | Accepted proposal | 2 |
+| 9 | A deadline on a top-level group with no predecessor | Accepted proposal | 2 |
+| 10 | Nested groups that both have deadlines | Accepted proposal | 2 |
+| 11 | Optional groups and completion | Decided | 1 |
+| 12 | Which open row an event completes, in detail | Accepted proposal | 1 |
+| 13 | Intelligence on `OVERDUE` / `MISSED` deviations | Decided | 3 |
+| 14 | Protocol completion rules | Fell away: protocol completion is deferred | — |
+| 15 | Which group reports | Open | 6 |
+| 16 | `step_status` on group intelligence events | Accepted proposal | 1 |
+| 17 | Events after a scheduled group has stopped | Accepted proposal | 4 |
 
 **1. When is the next scheduled cycle due?** *(B4; blocks phase 4)*
 B4's proposal settled when the next cycle opens, but not its due date. Example: quarterly review, cycle 0 due 10 Jan, its work finished on 25 Feb. Cycle 1 is due either 10 Apr (fixed calendar) or 25 May (3 months after the work).
