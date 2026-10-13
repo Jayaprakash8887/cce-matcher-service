@@ -221,7 +221,9 @@ CREATE TABLE step_group_instance (
     CONSTRAINT step_group_instance_cycle_key
         UNIQUE NULLS NOT DISTINCT (protocol_instance_id, group_action_id, parent_group_instance_id, cycle_index)
 );
-CREATE INDEX idx_step_group_instance_protocol ON step_group_instance (protocol_instance_id);
+-- Lookups by enrollment use the leading column of step_group_instance_cycle_key; no separate index.
+CREATE INDEX idx_step_group_instance_parent ON step_group_instance (parent_group_instance_id)
+    WHERE parent_group_instance_id IS NOT NULL;
 
 ALTER TABLE step_instance ADD COLUMN step_group_instance_id UUID REFERENCES step_group_instance(id);
 CREATE INDEX idx_step_instance_group ON step_instance (step_group_instance_id)
