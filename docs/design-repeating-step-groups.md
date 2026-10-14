@@ -1,12 +1,12 @@
 # Design: Step groups
 
-> **Superseded where decided.** This document is the proposal that has been reviewed, kept unchanged as that record. The questions in §12 have since been decided, and some decisions differ from the proposals here. The decisions, and the further points they settled, are in [implementation-plan-step-groups.md](implementation-plan-step-groups.md) (§1 and §2). Where the two disagree, the implementation plan takes precedence.
+> **Superseded where decided.** This document is the proposal that has been reviewed. On 2026-10-14 the design discussion that led to it was merged in (§1.1, §4.1, §11, §16), so the two are one record. The questions in §12 have since been decided, and some decisions differ from the proposals here. The decisions, and the further points they settled, are in [implementation-plan-step-groups.md](implementation-plan-step-groups.md) (§1 and §2). Where the two disagree, the implementation plan takes precedence.
 
-**Status:** Proposal. It follows the decisions in [step-group-design-discussion.md](step-group-design-discussion.md). The questions that discussion leaves open are referred to here by its ids (A1–D7); questions this design raises are added as E1–E6 (§12).
+**Status:** Proposal. It follows the design discussion's decision (§4.1). The questions the discussion left open keep its ids (A1–D7); questions this design raises are added as E1–E6 (§12).
 **Baseline:** CCE 2.0.0 (`release-2.0.0` of `cce-common-util`, `cce-matcher-service`, `cce-step-sla-service`, `cce-protocol-service`, `cce-data-pipeline`).
 **Scope:** Add the **step group**: a set of steps that belong together clinically, written in the PlanDefinition as a FHIR grouping action. A group may nest inside another group, may repeat, and may carry its own deadline.
 
-This revision replaces the earlier model, in which a group was a parent *step* defined by a repeating `Timing`. The discussion's §8.2 lists what carried over from that model.
+This revision replaces the earlier model, in which a group was a parent *step* defined by a repeating `Timing`. §16 lists what carried over from that model.
 
 ---
 
@@ -20,9 +20,30 @@ This revision replaces the earlier model, in which a group was a parent *step* d
 
 Most of the runtime behaviour depends on open questions (§12). §15 orders the work so the parts that don't depend on them can start first.
 
+### 1.1 Where this design comes from
+
+CCE is adding the step group: a set of steps that belong together, modelled on FHIR's way of grouping actions in a PlanDefinition. A design discussion first settled how to model it, so that it stays true to the clinical domain and fits CCE 2.0, and later features don't have to work around it. Its main question was:
+
+> A group has some of the same properties as a step: a status, a due date, and repeatability. Should a group be treated as a "compound step" and stored as a row in `step_instance`, or should it be its own concept?
+
+It decided that a group is its own concept (§4.1), and tested that on two real-world use cases: antenatal care, where each visit is a group, and the Rwanda EMR patient journey, which repeats on different days and holds smaller groups (§11). The questions it left open are A1–D7 in §12.
+
 ---
 
 ## 2. The step model this has to fit
+
+A step is defined in the PlanDefinition as an `action` with type `step`. Each occurrence of a step for a patient is one `step_instance` row:
+
+| Kind | Property | Notes |
+|---|---|---|
+| Links upward | protocol instance (and so the patient) | `protocol_instance_id` |
+| | step id | `action_id`, the step's `action.id` in the PlanDefinition |
+| Properties | matched event | `matched_event_id`, `completed_by_source` |
+| | match status | `step_status`: `NOT_STARTED` → `COMPLETED`. Did the expected event arrive? |
+| | SLA status | `sla_status`: null → `OVERDUE` → `MISSED`, or null → `MET`. Was it on time? |
+| | match (clinical) date | `completed_at`, the clinical time of the matched event |
+| | due date | `due_date`, written once when the step is created |
+| | repeatability | `timingTiming` in the PlanDefinition; each copy gets a `repeat_index` |
 
 A step has no single state. It has two independent fields:
 
@@ -67,13 +88,39 @@ What this means for groups:
 
 ### 4.1 Decision: its own concept and table
 
-Decided in the discussion (§4). A group shares property names with a step (status, due date, done date, repeat) but not their meanings. Every reader of `step_instance` assumes one row is one expected clinical event. That includes matching, progressive creation, step-sla and the analytics pipeline. Group rows in that table would need a "skip groups" check in each of them, permanently.
+**A group is not stored in `step_instance`.** It gets its own table, `step_group_instance`, and each step row points up to the group it belongs to. This was the design discussion's one decision (§1.1).
+
+**Same name, different meaning.** The properties a group shares with a step have the same names but mean different things:
+
+| Property | For a step | For a group |
+|---|---|---|
+| Status | **Observed.** An event arrived or it didn't. Two values only. | **Calculated** from its steps. It needs states a step never has, such as "partly done". |
+| Due date | A **deadline**, judged against one `completed_at`. | Can be a deadline (ANC, §11.1), or absent (Rwanda journey, §11.2). Its steps' due dates are often worked out from it. |
+| Done date | The clinical time of one matched event. | When the last mandatory step was done (stored as `completed_at`, §6.1). |
+| Matched event, source | Always means something. | Never applies. Always empty. |
+| Repeatability | N copies of the same step. | N cycles, each with a new set of all its steps. |
+
+Only repeatability means roughly the same thing for both.
+
+**What breaks if a group is a row in `step_instance`.** Every reader of `step_instance` assumes one row is one expected clinical event. A group row breaks that, and each reader would need an "unless it's a group" check, now and in every future feature:
+
+| Reader | What would go wrong |
+|---|---|
+| Matcher, `findActionableStep` | Could hand an incoming event to a group row. |
+| Matcher, progressive creation, backfill, order-violation check | Would treat the group as a step with its own predecessors and dependents. |
+| Step-sla service | Would judge the group as a step and raise its own `OVERDUE` / `MISSED` on top of its steps' deviations, so one miss counts twice. |
+| Column ownership | A group's status depends on both `step_status` (matcher) and `sla_status` (step-sla). Both services would have to write the same row, which breaks the one-writer rule. |
+| Analytics (CDC → ClickHouse → insights) | Every compliance count and dashboard number would include groups as if they were steps, until each query filters them out. |
+
+**FHIR points the same way.** In a PlanDefinition, FHIR uses the same element (`action`) for groups and steps. In FHIR's runtime form of a plan, R4 `RequestGroup`, an action has no status of its own; status lives on the resources the plan creates. FHIR treats a group as a container, not as something that happens.
+
+**The cost.** The tables that record deadlines, deviations and intelligence events can only point at a step today. If a group can have its own deadline, they must also be able to point at a group (§6.2, D1). This is a one-time change in those tables, not a check in every reader.
 
 ### 4.2 How a group is written
 
 | Element | On a group action |
 |---|---|
-| `groupingBehavior` | `logical-group`. On a `step`-typed action, this is what makes it a group instead of a standalone step (discussion §7.4). |
+| `groupingBehavior` | `logical-group`. On a `step`-typed action, this is what makes it a group instead of a standalone step (§13, point 6). |
 | `action[]` | The group's members: steps, nested groups, and `fire-event` intelligence actions (E4). It must contain at least one step, directly or in a nested group. |
 | `trigger` | None. A group is never matched directly. |
 | `type` | `step`, like every other step-typed action. `validateActionTypes` needs no change. |
@@ -193,7 +240,7 @@ CREATE INDEX idx_step_instance_group ON step_instance (step_group_instance_id)
 ```
 
 - **`NULLS NOT DISTINCT` is required.** Without it, PostgreSQL treats nulls in a unique key as different from each other. Two rows for the same top-level group and cycle (both with a null parent) would then both be accepted, and opening a top-level occurrence would not be idempotent. The clause needs PostgreSQL 15 or later; CCE runs 16.
-- **No status column.** "Complete / partly done / not started" is calculated from the steps (discussion §7.2, D2). Only facts are stored:
+- **No status column.** "Complete / partly done / not started" is calculated from the steps (D2): a stored calculated value drifts out of date. Only facts are stored:
   - `opened_at`, `completed_at` and `closed_at`, recorded by the matcher;
   - `sla_status`, recorded by step-sla.
 
@@ -377,9 +424,72 @@ Two mandatory members of one occurrence can settle at the same moment. A group v
 
 ---
 
-## 11. The use cases in this model
+## 11. The use cases
 
-| | ANC visit 2 (discussion §5) | Rwanda patient journey (discussion §6) |
+The design discussion tested the model on two real-world use cases.
+
+### 11.1 Antenatal care (ANC)
+
+WHO's 2016 ANC model recommends eight contacts: the first by 12 weeks of pregnancy, then at 20, 26, 30, 34, 36, 38 and 40 weeks. Each ANC visit is modelled as a group. An illustrative group (the step list is an example, not a clinical specification):
+
+```
+ANC visit 2  (group, due at 20 weeks, written off at 22 weeks)
+├── anc2-encounter    must
+├── anc2-bp           must
+├── anc2-weight       must
+├── anc2-urine-test   must
+└── anc2-counselling  could
+```
+
+**Does an ANC visit have a deadline?** Yes: if she hasn't come by about 22 weeks, visit 2 is missed. The question is which level is judged, the visit or each step inside it. Under CCE 2.0 rules, work done by the due date is `MET`; done after it but before the missed date, `OVERDUE`; not done by the missed date, `MISSED`. A step that goes overdue and is then missed records two deviations.
+
+| Scenario | Deadline on each step | Deadline on the group only |
+|---|---|---|
+| Comes at 19 weeks, all four mandatory steps done | 4 steps `MET` | Group `MET` |
+| Comes at 21 weeks, all done | 4 `OVERDUE` deviations | 1 `OVERDUE` deviation |
+| Never comes | 8 deviations (4 `OVERDUE` + 4 `MISSED`) | 2 deviations (1 `OVERDUE` + 1 `MISSED`) |
+| Comes at 19 weeks, urine test not done | Urine test `OVERDUE` then `MISSED`; the others `MET` | Group `OVERDUE` then `MISSED`, the same as never coming (A1) |
+
+A clinician thinks "she missed ANC visit 2", not "she missed BP, weight and urine". For ANC, the deadline belongs on the group. Other groups need the opposite: in a quarterly diabetes review, vitals are on day 0, the HbA1c test on day 3 and the consultation on day 7, so each step needs its own deadline. Hence a deadline at one level only, chosen by where the author puts `tolerance-days`, with at most one on any path from a top group down to a step (§5.3, C1). One missed fact always gives one verdict.
+
+**What ANC teaches about groups.**
+1. **A group does not have to repeat.** The eight visits are eight different groups: their contents differ (an early ultrasound is only expected at the first contact), and the gaps between them are uneven. Repeating is an optional property of a group, not what makes it one.
+2. **"Came but didn't finish" differs from "didn't come".** A woman who came on time but had no urine test has an unfinished group. Whether that deserves the same verdict as never coming is A1.
+3. **ANC due dates count from the start of pregnancy,** not from the previous visit: visit 2 is due at 20 weeks because of her last menstrual period. CCE today only sets due dates from when an earlier step happened (`relatedAction` offsets). This is the roadmap's "dynamic due date" item (A4).
+
+### 11.2 The Rwanda EMR patient journey
+
+Every step from check-in to referral or transfer sits inside one group, because the whole journey repeats: the patient comes back on different days. Smaller groups sit inside it, such as Consultation. An illustrative structure:
+
+```
+Patient journey  (group, repeats; one cycle per visit)
+├── check-in              must
+├── triage / vitals       must
+├── Consultation          (group)
+│   ├── history           must
+│   ├── examination       must
+│   └── diagnosis         must
+├── lab order / result    could
+├── dispensing            could
+└── referral / transfer   could
+```
+
+**Groups can be nested.** Each step points to its direct group only, and a step can't belong to two sibling groups, so groups and steps form a tree (§4.4). Whether an inner group can repeat inside one cycle of its outer group is B1.
+
+**A second kind of repeating.**
+
+| | Scheduled repeat (quarterly diabetes review) | Visit-driven repeat (Rwanda journey) |
+|---|---|---|
+| A new cycle starts | on a calendar, every `period` | when the patient walks in |
+| Group due date | yes | usually none; deadlines, if any, sit on steps relative to check-in |
+| Number of cycles | a fixed `count`, or a bound (§5.1) | open-ended |
+| FHIR expression | `Timing.repeat` | no direct equivalent in `Timing` (B3) |
+
+The visit-driven kind raises a matching question that scheduled groups barely have: when a vitals or diagnosis event arrives, which journey does it belong to (B2, B6)?
+
+### 11.3 Both in this model
+
+| | ANC visit 2 (§11.1) | Rwanda patient journey (§11.2) |
 |---|---|---|
 | PlanDefinition | Group action, `logical-group`, `tolerance-days` on the group, due from `relatedAction` or pregnancy dating (A4) | Group action, `logical-group`, repeats per visit (B3), containing a Consultation group |
 | Rows | One `step_group_instance` (cycle 0), due at 20 weeks. Its mandatory steps have no SLA rows. | One occurrence per visit, plus one Consultation occurrence per visit pointing to it as parent |
@@ -391,7 +501,7 @@ Two mandatory members of one occurrence can settle at the same moment. A group v
 
 ## 12. Open questions
 
-Each question below can be read on its own. It starts with an example scenario, then gives the options and this design's proposal where it has one. Section references are at the end of each question. A1–D7 are the discussion record's ids (its §9); E1–E6 are raised by this design.
+Each question below can be read on its own. It starts with an example scenario, then gives the options and this design's proposal where it has one. Section references are at the end of each question. A1–D7 come from the design discussion (§1.1); E1–E6 were raised by this design.
 
 The examples reuse three protocols:
 - **ANC visit 2:** a group due at 20 weeks of pregnancy and written off at 22 weeks, with mandatory steps encounter, BP, weight and urine test, and optional counselling.
@@ -420,6 +530,7 @@ The examples reuse three protocols:
 | D3 | Build protocol completion now? | Both | — |
 | D4 | Rule-context field names | CCE team | `groupActionId`, `cycleIndex` |
 | D5 | Group reporting in the first release? | Product | — |
+| D6 | Protocols already loaded that use `groupingBehavior` | CCE team | Scan before enabling |
 | D7 | Table naming | CCE team | `step_group_instance` |
 | E1 | `selectionBehavior` in the first release | CCE team | Absent means `all`; reject others |
 | E2 | When does a group with no trigger open? | Both | — |
@@ -686,6 +797,14 @@ If now, it needs a rule for open-ended groups. The Rwanda journey has no count o
 
 *See:* §10.
 
+**D6. Do protocols already loaded use `groupingBehavior`?**
+
+*Scenario.* A PlanDefinition loaded in Rwanda before this change sets `groupingBehavior: logical-group` on an action, say for display. After the change that action becomes a group: it is never matched, and its trigger is ignored (§5.2).
+
+*Proposal.* Before enabling groups, scan the loaded PlanDefinitions and list any action with `logical-group`. `visual-group` and `sentence-group` keep today's behaviour (§4.2), so they need no change.
+
+*See:* §4.2, §5.2.
+
 **D7. What is the table called?**
 
 `step_group_instance` / `step_group_instance_id`, as in the discussion and this design, or `group_step_instance` from the earlier version. *Proposal:* `step_group_instance`.
@@ -708,19 +827,19 @@ If now, it needs a rule for open-ended groups. The Rwanda journey has no count o
 
 ---
 
-## 13. Points to feed back into the discussion record
+## 13. Where this design corrects the discussion
 
-These came from checking the discussion against the 2.0.0 code. Section numbers in the bold headings are the discussion record's; those at the end of each point are this design's.
+These came from checking the discussion's proposals against the 2.0.0 code. Each is settled here, in the section given at its end.
 
-1. **A due date is already a deadline (discussion §5.2, C2).** A mandatory step goes `OVERDUE` on its due date whether or not it has `tolerance-days`; `tolerance-days` only adds `MISSED`. So "the author chooses the level by where they put `tolerance-days`" holds only if the matcher also schedules no step rows under a group deadline (§8.1). Likewise, a step with no tolerance can never be `MISSED`, but it can be `OVERDUE`.
-2. **The unique key in discussion §7.1 needs `NULLS NOT DISTINCT`**, or top-level occurrences can be duplicated (§6.1).
-3. **CDC has no connector column list (discussion §8.1).** The new table has to be added to the connector's `table.include.list` and to the `cce_analytics_pub` publication. New columns are captured automatically, but ClickHouse DDL and ingestion need them (§10).
-4. **D1, `intelligence_event_log` (discussion §9).** its `step_instance_id` is already nullable with no foreign key. What blocks group events there is its `NOT NULL` `step_status` column.
-5. **`selectionBehavior` default (discussion §7.4).** See E1 and §4.2.
-6. **What marks a group (discussion §7.4).** The discussion says both "`groupingBehavior: logical-group`" and "an action with `groupingBehavior` set". These differ for `visual-group` and `sentence-group`. This design reads the rule as `logical-group` only (§4.2).
-7. **A group keeps `type: step` (discussion §7.4).** The discussion says a group action carries no type and that `validateActionTypes` must change. This design keeps groups typed `step` and tells them apart by `groupingBehavior: logical-group`. The validator and the parser walks then need no change, and the work moves to keeping groups out of the step list (§5.2).
-8. **How a scheduled repeat ends (discussion §6.2).** The discussion lists a fixed `count` or a `boundsPeriod` end. `boundsDuration`, a length counted from each patient's start, fits a template better and is supported here. `boundsRange` and `boundsPeriod.start` are rejected at load rather than ignored (§5.1).
-9. **Who works out when a group was done (discussion §5.2, §7.2).** The discussion has step-sla read the group's steps when a deadline row falls due, with no calculated value stored. But step-sla parses no PlanDefinitions, and the step rows alone can't show a mandatory member that hasn't been created yet. So the matcher records the occurrence's `completed_at`, and step-sla judges from that (§6.1, §8.2).
+1. **A due date is already a deadline (C2).** A mandatory step goes `OVERDUE` on its due date whether or not it has `tolerance-days`; `tolerance-days` only adds `MISSED`. So the discussion's "the author chooses the level by where they put `tolerance-days`" (§11.1) holds only if the matcher also schedules no step rows under a group deadline (§8.1). Likewise, a step with no tolerance can never be `MISSED`, but it can be `OVERDUE`.
+2. **The discussion's unique key needs `NULLS NOT DISTINCT`**, or top-level occurrences can be duplicated (§6.1).
+3. **CDC has no connector column list.** The new table has to be added to the connector's `table.include.list` and to the `cce_analytics_pub` publication. New columns are captured automatically, but ClickHouse DDL and ingestion need them (§10).
+4. **D1, `intelligence_event_log`.** Its `step_instance_id` is already nullable with no foreign key. What blocks group events there is its `NOT NULL` `step_status` column.
+5. **`selectionBehavior` default.** The discussion left it unsaid. See E1 and §4.2.
+6. **What marks a group.** The discussion says both "`groupingBehavior: logical-group`" and "an action with `groupingBehavior` set". These differ for `visual-group` and `sentence-group`. This design reads the rule as `logical-group` only (§4.2).
+7. **A group keeps `type: step`.** The discussion says a group action carries no type and that `validateActionTypes` must change. This design keeps groups typed `step` and tells them apart by `groupingBehavior: logical-group`. The validator and the parser walks then need no change, and the work moves to keeping groups out of the step list (§5.2).
+8. **How a scheduled repeat ends.** The discussion lists a fixed `count` or a `boundsPeriod` end. `boundsDuration`, a length counted from each patient's start, fits a template better and is supported here. `boundsRange` and `boundsPeriod.start` are rejected at load rather than ignored (§5.1).
+9. **Who works out when a group was done.** The discussion has step-sla read the group's steps when a deadline row falls due, with no calculated value stored. But step-sla parses no PlanDefinitions, and the step rows alone can't show a mandatory member that hasn't been created yet. So the matcher records the occurrence's `completed_at`, and step-sla judges from that (§6.1, §8.2).
 
 ---
 
@@ -744,3 +863,20 @@ These came from checking the discussion against the 2.0.0 code. Section numbers 
 3. **Lifecycle (§7)** after B1–B6, E2, E3 and E6.
 4. **Deadlines (§8)** after A1, C1–C3, B5 and E5.
 5. **Protocol completion (D3)** on the shared complete/closed logic, when D3 is decided.
+
+---
+
+## 16. What carried over from the earlier model
+
+This design replaced an earlier model, in which a group was a parent *step* defined by a repeating `Timing`. The design discussion recorded what carried over:
+
+| Earlier model | Status |
+|---|---|
+| A group root is itself a `step` | **Replaced.** A group stays typed `step`, but is marked with `groupingBehavior: logical-group`, has no trigger, and never becomes a step (§4.2, §13 point 7). |
+| A group is defined by its repeating `Timing` | **Replaced.** Repeating is optional (§4.3). |
+| `validateNoNestedRepeatingGroups` | **Replaced** by the repeat-within-repeat rule (B1, §5.3). |
+| `group_step_instance` table | **Kept in spirit,** renamed `step_group_instance`, and extended with a parent group, a deadline and an SLA status (§6.1, D7). |
+| Open a cycle by creating only its entry steps; later steps arrive through their own `relatedAction` offsets | **Still applies** (§7.1). |
+| Progressive creation deduplicates within a cycle, not across the whole instance | **Still applies** (§7.2). |
+| Lock `protocol_instance` before checking whether a cycle is done; lock the step row first, then `protocol_instance` | **Still applies** (§9). |
+| Q1 (when a cycle is done), Q2 (who opens the next cycle), Q3 (which row an event completes) | **Carried** into B4, B5 and B6 (§12). |
