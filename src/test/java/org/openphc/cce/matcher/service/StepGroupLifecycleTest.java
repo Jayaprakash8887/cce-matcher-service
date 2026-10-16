@@ -185,6 +185,20 @@ class StepGroupLifecycleTest {
         return action;
     }
 
+    private static void afterStart(PlanDefinitionActionComponent action, String prerequisiteId, int days) {
+        action.addRelatedAction()
+                .setActionId(prerequisiteId)
+                .setRelationship(ActionRelationshipType.AFTERSTART)
+                .setOffset(new Duration().setValue(days).setUnit("d"));
+    }
+
+    private StepGroupInstance occurrence(String groupActionId, StepGroupInstance parent, int cycleIndex,
+                                         OffsetDateTime openedAt) {
+        return groupInstanceRepository.save(StepGroupInstance.builder()
+                .protocolInstance(enrollment).parentGroupInstance(parent).groupActionId(groupActionId)
+                .cycleIndex(cycleIndex).openedAt(openedAt).build());
+    }
+
     private static void after(PlanDefinitionActionComponent action, String prerequisiteId, int days) {
         action.addRelatedAction()
                 .setActionId(prerequisiteId)
@@ -296,6 +310,9 @@ class StepGroupLifecycleTest {
             step(visit.addAction(), "counselling", "could");
             PlanDefinitionActionComponent nutrition = group(visit.addAction(), "nutrition", "could");
             step(nutrition.addAction(), "diet", "must");
+            PlanDefinitionActionComponent followUp = group(pd.addAction(), "follow-up", "could");
+            after(followUp, "registration", 7);
+            step(followUp.addAction(), "call", "must");
             use(pd);
         }
 
@@ -309,6 +326,17 @@ class StepGroupLifecycleTest {
             assertEquals(1, rowsFor("weight").size());
             assertTrue(rowsFor("counselling").isEmpty(), "optional steps are never created in advance");
             assertTrue(occurrenceOf("nutrition").isEmpty(), "optional groups are never opened in advance");
+            assertTrue(occurrenceOf("follow-up").isEmpty(), "nor when they follow a step that completed");
+        }
+
+        @Test
+        void aVisitOpenedByOneOfItsStepsIsNotOpenedAgain_whenItsPredecessorCompletes() {
+            record("bp", T0);
+            assertNull(occurrenceOf("visit-2").orElseThrow().getDueDate(), "registration hasn't happened yet");
+
+            record("registration", T0.plusDays(1));
+
+            assertEquals(1, groupRows.stream().filter(g -> g.getGroupActionId().equals("visit-2")).count());
         }
 
         @Test
@@ -359,6 +387,15 @@ class StepGroupLifecycleTest {
         }
 
         @Test
+        void anEventForAStepThatAnotherEventsOpeningCreated_getsThatRow() {
+            record("bp", T0);
+            StepInstance created = rowsFor("weight").get(0);
+
+            assertSame(created, service.createInitialGroupedStep(enrollment, protocol.step("weight"), T0, T0));
+            assertEquals(1, rowsFor("weight").size());
+        }
+
+        @Test
         void aSecondEventForACompletedStep_addsAFurtherCompletedRowInTheSameOccurrence() {
             record("bp", T0);
             record("bp", T0.plusMinutes(30));
@@ -405,6 +442,19 @@ class StepGroupLifecycleTest {
         }
 
         @Test
+        void anEventGoesToTheLatestInnerCycle_underTheLatestOuterCycle() {
+            StepGroupInstance firstVisit = occurrence("journey", null, 0, T0);
+            StepGroupInstance secondVisit = occurrence("journey", null, 1, T0.plusDays(14));
+            StepGroupInstance secondInFirstVisit = occurrence("consultation", firstVisit, 1, T0.plusHours(5));
+            StepGroupInstance firstInSecondVisit = occurrence("consultation", secondVisit, 0, T0.plusDays(14));
+            service.createStep(enrollment, "history", 0, T0.plusHours(5), null, "must", secondInFirstVisit);
+            StepInstance latest = service.createStep(
+                    enrollment, "history", 0, T0.plusDays(14), null, "must", firstInSecondVisit);
+
+            assertSame(latest, service.findActionableStep(enrollment.getId(), "history", T0.plusHours(5)));
+        }
+
+        @Test
         void nestedGroupsAreNeverRecordedComplete() {
             record("check-in", T0);
             record("history", T0.plusMinutes(20));
@@ -432,6 +482,14 @@ class StepGroupLifecycleTest {
 
             assertSame(april, service.findActionableStep(enrollment.getId(), "vitals", T0.plusMonths(3).plusDays(2)));
             assertSame(january, service.findActionableStep(enrollment.getId(), "vitals", T0.plusDays(10)));
+        }
+
+        @Test
+        void twoRowsWithNoDueDate_theOlderComesFirst() {
+            StepInstance older = service.createStep(enrollment, "vitals", 0, null, null, "must");
+            service.createStep(enrollment, "vitals", 1, null, null, "must");
+
+            assertSame(older, service.findActionableStep(enrollment.getId(), "vitals", T0));
         }
 
         @Test
@@ -516,6 +574,95 @@ class StepGroupLifecycleTest {
             List<StepInstance> examinations = rowsFor("examination");
             assertEquals(examinationsBefore + 1, examinations.size());
             assertEquals(current.getId(), occurrenceIdOf(examinations.get(examinations.size() - 1)));
+        }
+    }
+
+    @Nested
+    class ClinicVisit {
+
+        /** A visit: intake, and a measurements group holding BP; nothing waits on anything. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            step(visit.addAction(), "intake", "must");
+            PlanDefinitionActionComponent measurements = group(visit.addAction(), "measurements", "must");
+            step(measurements.addAction(), "bp", "must");
+            use(pd);
+        }
+
+        @Test
+        void aNestedGroupWithNoPredecessorOpensWithItsParent_andCreatesItsFirstSteps() {
+            record("intake", T0);
+
+            StepGroupInstance visit = occurrenceOf("visit").orElseThrow();
+            StepGroupInstance measurements = occurrenceOf("measurements").orElseThrow();
+            assertEquals(visit.getId(), measurements.getParentGroupInstance().getId());
+            assertEquals(measurements.getId(), occurrenceIdOf(rowsFor("bp").get(0)));
+        }
+    }
+
+    @Nested
+    class TwoPrerequisites {
+
+        /** A review group due 10 days after the assessment starts, and 5 days after the labs end. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            step(pd.addAction(), "assessment", "must");
+            step(pd.addAction(), "labs", "must");
+            PlanDefinitionActionComponent review = group(pd.addAction(), "review", "must");
+            afterStart(review, "assessment", 10);
+            after(review, "labs", 5);
+            step(review.addAction(), "summary", "must");
+            use(pd);
+        }
+
+        @Test
+        void aGroupWaitsWhileAnotherPrerequisiteIsInFlight_thenTakesTheLatestDueDate() {
+            service.createStep(enrollment, "labs", 0, T0.plusDays(2), null, "must");
+            record("assessment", T0);
+            assertTrue(occurrenceOf("review").isEmpty(), "the labs are still outstanding");
+
+            record("labs", T0.plusDays(3));
+
+            assertEquals(T0.plusDays(10), occurrenceOf("review").orElseThrow().getDueDate(),
+                    "10 days after the assessment started is later than 5 days after the labs ended");
+        }
+    }
+
+    @Nested
+    class StepsAcrossAGroupBoundary {
+
+        /** Registration; a visit whose BP is due 7 days after registration; a treatment that follows BP. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            step(pd.addAction(), "registration", "must");
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            after(step(visit.addAction(), "bp", "must"), "registration", 7);
+            step(visit.addAction(), "weight", "must");
+            after(step(pd.addAction(), "treatment", "must"), "bp", 0);
+            use(pd);
+        }
+
+        @Test
+        void aStepOutsideTheGroupCompleting_opensTheGroupForTheStepThatFollowsIt() {
+            record("registration", T0);
+
+            StepGroupInstance visit = occurrenceOf("visit").orElseThrow();
+            assertEquals(1, rowsFor("bp").size());
+            assertEquals(visit.getId(), occurrenceIdOf(rowsFor("bp").get(0)));
+            assertEquals(visit.getId(), occurrenceIdOf(rowsFor("weight").get(0)));
+        }
+
+        @Test
+        void aMissingPredecessorInsideAGroup_isBackfilledIntoTheGroupItOpens() {
+            record("treatment", T0);
+
+            StepGroupInstance visit = occurrenceOf("visit").orElseThrow();
+            assertEquals(1, rowsFor("bp").size());
+            assertEquals(visit.getId(), occurrenceIdOf(rowsFor("bp").get(0)));
         }
     }
 

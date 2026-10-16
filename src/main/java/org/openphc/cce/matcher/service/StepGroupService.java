@@ -48,9 +48,6 @@ public class StepGroupService {
         }
     }
 
-    /** An occurrence, and whether this call created it. */
-    public record Opened(StepGroupInstance occurrence, boolean created) {}
-
     /** A group's occurrence for one cycle within one occurrence of its parent, if it has been opened. */
     public Optional<StepGroupInstance> find(ProtocolInstance protocolInstance, String groupActionId,
                                             StepGroupInstance parent, int cycleIndex) {
@@ -61,21 +58,10 @@ public class StepGroupService {
                         protocolInstance.getId(), groupActionId, parent.getId(), cycleIndex);
     }
 
-    /**
-     * Find an occurrence, or insert it. Safe as find-then-insert because the caller holds the
-     * enrollment's lock; the table's unique key is the backstop.
-     *
-     * @param dueDate  the occurrence's planned due date, or null when none can be worked out
-     * @param openedAt the clinical time of whatever opened it
-     */
-    public Opened findOrOpen(ProtocolInstance protocolInstance, String groupActionId,
-                             StepGroupInstance parent, int cycleIndex,
-                             OffsetDateTime dueDate, OffsetDateTime openedAt) {
-        Optional<StepGroupInstance> existing = find(protocolInstance, groupActionId, parent, cycleIndex);
-        if (existing.isPresent()) {
-            return new Opened(existing.get(), false);
-        }
-
+    /** Insert an occurrence; the caller holds the enrollment's lock and has found none, and the unique key is the backstop. */
+    public StepGroupInstance open(ProtocolInstance protocolInstance, String groupActionId,
+                                  StepGroupInstance parent, int cycleIndex,
+                                  OffsetDateTime dueDate, OffsetDateTime openedAt) {
         StepGroupInstance occurrence = groupInstanceRepository.save(StepGroupInstance.builder()
                 .protocolInstance(protocolInstance)
                 .parentGroupInstance(parent)
@@ -87,6 +73,6 @@ public class StepGroupService {
 
         log.info("Opened step group occurrence: group={}, cycle={}, instanceId={}, occurrenceId={}, due={}",
                 groupActionId, cycleIndex, protocolInstance.getId(), occurrence.getId(), dueDate);
-        return new Opened(occurrence, true);
+        return occurrence;
     }
 }
