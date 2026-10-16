@@ -6,11 +6,13 @@ import org.openphc.cce.common.intelligence.IntelligenceActionEvaluator;
 import org.openphc.cce.common.entity.Deviation;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.ProtocolDefinition;
+import org.openphc.cce.common.entity.StepGroupInstance;
 import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.history.StateTransitionHistoryWriter;
 import org.openphc.cce.common.enums.DeviationType;
 import org.openphc.cce.common.enums.SlaStatus;
 import org.openphc.cce.common.enums.StepStatus;
+import org.openphc.cce.common.repository.StepGroupInstanceRepository;
 import org.openphc.cce.common.repository.StepInstanceRepository;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
@@ -20,13 +22,18 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -44,6 +51,8 @@ public class StepInstanceService {
     private final StateTransitionHistoryWriter stateTransitionHistoryWriter;
     private final StepSlaScheduleService slaScheduleService;
     private final SlaThresholdReader slaThresholdReader;
+    private final StepGroupService stepGroupService;
+    private final StepGroupInstanceRepository stepGroupInstanceRepository;
 
     public StepInstanceService(StepInstanceRepository stepInstanceRepository,
                                ParsedProtocolCache parsedProtocolCache,
@@ -51,7 +60,9 @@ public class StepInstanceService {
                                IntelligenceActionEvaluator intelligenceActionEvaluator,
                                StateTransitionHistoryWriter stateTransitionHistoryWriter,
                                StepSlaScheduleService slaScheduleService,
-                               SlaThresholdReader slaThresholdReader) {
+                               SlaThresholdReader slaThresholdReader,
+                               StepGroupService stepGroupService,
+                               StepGroupInstanceRepository stepGroupInstanceRepository) {
         this.stepInstanceRepository = stepInstanceRepository;
         this.parsedProtocolCache = parsedProtocolCache;
         this.deviationRecorder = deviationRecorder;
@@ -59,6 +70,8 @@ public class StepInstanceService {
         this.stateTransitionHistoryWriter = stateTransitionHistoryWriter;
         this.slaScheduleService = slaScheduleService;
         this.slaThresholdReader = slaThresholdReader;
+        this.stepGroupService = stepGroupService;
+        this.stepGroupInstanceRepository = stepGroupInstanceRepository;
     }
 
     /**
@@ -84,9 +97,23 @@ public class StepInstanceService {
     public StepInstance createStep(ProtocolInstance protocolInstance, String actionId,
                                    int repeatIndex, OffsetDateTime dueDate,
                                    OffsetDateTime missedDate, String requiredBehavior) {
+        return createStep(protocolInstance, actionId, repeatIndex, dueDate, missedDate, requiredBehavior, null);
+    }
+
+    /**
+     * {@link #createStep(ProtocolInstance, String, int, OffsetDateTime, OffsetDateTime, String)} for a
+     * step inside a step group, attached to the group occurrence it belongs to.
+     *
+     * @param groupOccurrence the occurrence of the step's nearest group, or null outside any group
+     */
+    public StepInstance createStep(ProtocolInstance protocolInstance, String actionId,
+                                   int repeatIndex, OffsetDateTime dueDate,
+                                   OffsetDateTime missedDate, String requiredBehavior,
+                                   StepGroupInstance groupOccurrence) {
         StepInstance step = StepInstance.builder()
                 .protocolInstance(protocolInstance)
                 .actionId(actionId)
+                .stepGroupInstance(groupOccurrence)
                 .repeatIndex(repeatIndex)
                 .stepStatus(StepStatus.NOT_STARTED)
                 // sla_status stays null: no threshold has fallen due, so there is nothing to judge
@@ -164,14 +191,11 @@ public class StepInstanceService {
         log.info("Completed step: stepId={}, actionId={}, completedAt={} (SLA judged by the Step SLA Service)",
                 step.getId(), step.getActionId(), completedAt);
 
-        // The flattened steps and the normalized relatedAction graph — all three passes below
-        // traverse them.
-        ProtocolDefinition protocolDef = step.getProtocolInstance().getProtocolDefinition();
-        ParsedProtocolCache.ParsedProtocol protocol =
-                parsedProtocolCache.get(protocolDef.getId(),
-                        () -> protocolDef.getDefinition().toString());
-        List<PlanDefinitionParser.StepMetadata> steps = protocol.steps();
-        PlanDefinitionParser.DependencyGraph graph = protocol.dependencyGraph();
+        ParsedProtocolCache.ParsedProtocol protocol = parsedProtocol(step.getProtocolInstance());
+
+        // Everything below may open or complete a step group occurrence, so for a protocol with groups
+        // the enrollment is locked first. A protocol without groups is not locked.
+        stepGroupService.lock(step.getProtocolInstance(), protocol);
 
         // This instance's step rows, read once and threaded through all three passes.
         //
@@ -183,24 +207,77 @@ public class StepInstanceService {
         List<StepInstance> siblings = new ArrayList<>(
                 stepInstanceRepository.findByProtocolInstanceId(step.getProtocolInstance().getId()));
 
-        detectOrderViolations(step, steps, graph, siblings);
-        createDependentSteps(step, graph, siblings, thresholds);
-        backfillMissingMandatorySteps(step, steps, graph, siblings);
+        detectOrderViolations(step, protocol, siblings);
+        createDependentSteps(step, protocol, siblings, thresholds);
+        backfillMissingMandatorySteps(step, protocol, siblings);
     }
 
     /**
-     * Find the first step still awaiting its event for a given protocol instance and actionId.
-     * Returns null if none is outstanding.
+     * The step an event for {@code actionId} completes, or null when none is awaiting its event.
      *
      * <p>Scoped by {@link StepStatus} alone, so a step whose SLA is already MISSED is still picked
      * up by a late event rather than a duplicate row being created for it.
+     *
+     * <p>A step in a group is completed only in the group's latest cycle, whatever the event's clinical
+     * time: an earlier cycle's open row is left as it is. A repeated step outside any group completes the
+     * row whose due date is nearest the event's clinical time. Ties go to the earlier due date; rows with
+     * no due date come after dated ones, oldest first.
+     *
+     * @param occurredAt the event's clinical occurrence time
      */
     @Transactional(readOnly = true)
-    public StepInstance findActionableStep(UUID protocolInstanceId, String actionId) {
-        List<StepInstance> steps = stepInstanceRepository
-                .findByProtocolInstanceIdAndActionIdAndStepStatus(
-                        protocolInstanceId, actionId, StepStatus.NOT_STARTED);
-        return steps.isEmpty() ? null : steps.get(0);
+    public StepInstance findActionableStep(UUID protocolInstanceId, String actionId, OffsetDateTime occurredAt) {
+        List<StepInstance> open = stepInstanceRepository.findByProtocolInstanceIdAndActionIdAndStepStatus(
+                protocolInstanceId, actionId, StepStatus.NOT_STARTED);
+        Optional<StepGroupInstance> anyOccurrence = open.stream()
+                .map(StepInstance::getStepGroupInstance)
+                .filter(Objects::nonNull)
+                .findFirst();
+        if (anyOccurrence.isPresent()) {
+            StepGroupInstance latest = latestCycle(protocolInstanceId, anyOccurrence.get().getGroupActionId());
+            open = open.stream()
+                    .filter(s -> s.getStepGroupInstance() != null
+                            && Objects.equals(s.getStepGroupInstance().getId(), latest.getId()))
+                    .toList();
+        }
+        return open.stream().min(nearestDueDate(occurredAt)).orElse(null);
+    }
+
+    /** The group's occurrence opened most recently, compared from the top-level group down. */
+    private StepGroupInstance latestCycle(UUID protocolInstanceId, String groupActionId) {
+        return stepGroupInstanceRepository.findByProtocolInstanceIdAndGroupActionId(protocolInstanceId, groupActionId)
+                .stream()
+                .max(StepInstanceService::compareCyclePaths)
+                .orElseThrow();
+    }
+
+    private static int compareCyclePaths(StepGroupInstance a, StepGroupInstance b) {
+        List<Integer> pathA = cyclePath(a);
+        List<Integer> pathB = cyclePath(b);
+        for (int i = 0; i < Math.min(pathA.size(), pathB.size()); i++) {
+            int byLevel = Integer.compare(pathA.get(i), pathB.get(i));
+            if (byLevel != 0) {
+                return byLevel;
+            }
+        }
+        return Integer.compare(pathA.size(), pathB.size());
+    }
+
+    /** The cycle indexes from the top-level occurrence down to this one. */
+    private static List<Integer> cyclePath(StepGroupInstance occurrence) {
+        java.util.LinkedList<Integer> path = new java.util.LinkedList<>();
+        for (StepGroupInstance o = occurrence; o != null; o = o.getParentGroupInstance()) {
+            path.addFirst(o.getCycleIndex());
+        }
+        return path;
+    }
+
+    private static Comparator<StepInstance> nearestDueDate(OffsetDateTime occurredAt) {
+        return Comparator.<StepInstance, Boolean>comparing(s -> s.getDueDate() == null)
+                .thenComparingLong(s -> s.getDueDate() == null
+                        ? 0L : Math.abs(Duration.between(occurredAt, s.getDueDate()).toMillis()))
+                .thenComparing(StepInstance::getDueDate, Comparator.nullsLast(Comparator.naturalOrder()))
+                .thenComparing(StepInstance::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()));
     }
 
     /**
@@ -220,15 +297,14 @@ public class StepInstanceService {
      * {@link PlanDefinitionParser#buildDependencyGraph}).
      */
     private void detectOrderViolations(StepInstance completedStep,
-                                       List<PlanDefinitionParser.StepMetadata> steps,
-                                       PlanDefinitionParser.DependencyGraph graph,
+                                       ParsedProtocolCache.ParsedProtocol protocol,
                                        List<StepInstance> siblings) {
         String completedStepId = completedStep.getActionId();
 
-        Set<String> mustStepIds = PlanDefinitionParser.mustStepIds(steps);
+        Set<String> mustStepIds = PlanDefinitionParser.mustStepIds(protocol.steps());
 
         // Immediate predecessors of this step, restricted to mandatory ones
-        List<String> mustPredecessorIds = graph.predecessorsOf(completedStepId).stream()
+        List<String> mustPredecessorIds = protocol.dependencyGraph().predecessorsOf(completedStepId).stream()
                 .distinct()
                 .filter(mustStepIds::contains)
                 .toList();
@@ -242,6 +318,7 @@ public class StepInstanceService {
         for (String predecessorId : mustPredecessorIds) {
             boolean hasIncomplete = siblings.stream()
                     .filter(s -> predecessorId.equals(s.getActionId()))
+                    .filter(s -> inScope(completedStep.getStepGroupInstance(), s, protocol))
                     .anyMatch(this::isOutstandingStep);
             if (hasIncomplete) {
                 incompletePrerequisites.add(predecessorId);
@@ -269,39 +346,49 @@ public class StepInstanceService {
 
     /**
      * Progressive step instantiation: when a step completes, create the PENDING steps that declare
-     * it as a prerequisite, with due dates calculated from their own {@code relatedAction} offsets.
+     * it as a prerequisite, with due dates calculated from their own {@code relatedAction} offsets,
+     * and open the mandatory step groups that follow it.
      *
      * <p>{@code relatedAction} is relative rather than forward — a step states how it sits against
      * another — so the forward direction needed here comes from the normalized graph (see
      * {@link PlanDefinitionParser#buildDependencyGraph}). The offset that positions a dependent step
      * is the one on the edge between it and this prerequisite, whichever end declared it.
+     *
+     * <p>A dependent in the completed step's own group occurrence joins that occurrence, and is
+     * deduplicated within it. A dependent in another group joins that group's occurrence, opening it if
+     * need be.
      */
     private void createDependentSteps(StepInstance completedStep,
-                                      PlanDefinitionParser.DependencyGraph graph,
+                                      ParsedProtocolCache.ParsedProtocol protocol,
                                       List<StepInstance> siblings,
                                       SlaThresholdReader.SlaThresholds completedThresholds) {
         ProtocolInstance protocolInstance = completedStep.getProtocolInstance();
+        PlanDefinitionParser.DependencyGraph graph = protocol.dependencyGraph();
 
-        // Steps that depend on the just-completed step
-        List<PlanDefinitionParser.StepDependency> dependents =
-                graph.successorsOf(completedStep.getActionId());
+        // after-start: offset from when the prerequisite became active (its scheduled due date)
+        // after-end / after (default): offset from when the prerequisite completed (completedAt)
+        OffsetDateTime startedAt = completedThresholds.dueDate() != null
+                ? completedThresholds.dueDate()
+                : completedStep.getCompletedAt();
 
-        if (dependents.isEmpty()) {
-            return;
-        }
-
-        for (PlanDefinitionParser.StepDependency dependent : dependents) {
+        for (PlanDefinitionParser.StepDependency dependent : graph.successorsOf(completedStep.getActionId())) {
             PlanDefinitionParser.StepMetadata targetStep = dependent.step();
             PlanDefinitionParser.RelatedStepInfo edge = dependent.edge();
+            StepGroupInstance sameOccurrence = sharedOccurrence(completedStep, targetStep);
 
             // Dedup guard: skip if an instance for this step already exists.
             // A target may already exist because it was created reactively by its own
             // trigger (createInitialStep) before its predecessor completed, or because a
             // redelivered event re-completed the predecessor. Without this guard, progressive
             // instantiation would create a duplicate step that later goes overdue/missed and
-            // raises a spurious deviation.
-            if (stepInstanceRepository.existsByProtocolInstanceIdAndActionId(
-                    protocolInstance.getId(), targetStep.id())) {
+            // raises a spurious deviation. Within a group occurrence the guard looks only at that
+            // occurrence, so a later occurrence of the group can create the step again.
+            boolean exists = sameOccurrence != null
+                    ? stepInstanceRepository.existsByStepGroupInstanceIdAndActionId(
+                            sameOccurrence.getId(), targetStep.id())
+                    : stepInstanceRepository.existsByProtocolInstanceIdAndActionId(
+                            protocolInstance.getId(), targetStep.id());
+            if (exists) {
                 log.debug("Skipping progressive instantiation of {} — an instance for this step already exists (instanceId={})",
                         targetStep.id(), protocolInstance.getId());
                 continue;
@@ -327,57 +414,77 @@ public class StepInstanceService {
             // than whichever happened to complete first — each of their completions re-runs this
             // method, so the wait resolves itself.
             String blockingPrerequisite = firstInFlightPrerequisite(
-                    graph.predecessorsOf(targetStep.id()), completedStep.getActionId(), siblings);
+                    graph.predecessorsOf(targetStep.id()), completedStep.getActionId(),
+                    completedStep.getStepGroupInstance(), protocol, siblings);
             if (blockingPrerequisite != null) {
                 log.debug("Deferring progressive instantiation of {} — prerequisite {} is still in flight (instanceId={})",
                         targetStep.id(), blockingPrerequisite, protocolInstance.getId());
                 continue;
             }
 
-            // after-start: offset from when the prerequisite became active (its scheduled due date)
-            // after-end / after (default): offset from when the prerequisite completed (completedAt)
             OffsetDateTime baseTime = "after-start".equals(edge.relationship())
-                    ? completedThresholds.dueDate()
+                    ? startedAt
                     : completedStep.getCompletedAt();
-            if (baseTime == null) {
-                baseTime = completedStep.getCompletedAt();
-            }
             OffsetDateTime dueDate = calculateDueDate(baseTime, edge);
 
-            // Create step instances — if timing specifies recurring, create N instances
-            int repeatCount = 1;
-            java.math.BigDecimal repeatPeriod = null;
-            String repeatPeriodUnit = null;
-            if (targetStep.timing() != null) {
-                PlanDefinitionParser.TimingInfo timing = targetStep.timing();
-                if (timing.count() != null && timing.count() > 1) {
-                    repeatCount = timing.count();
-                    repeatPeriod = timing.period();
-                    repeatPeriodUnit = timing.periodUnit();
+            StepGroupInstance occurrence = sameOccurrence;
+            if (occurrence == null && targetStep.groupId() != null) {
+                occurrence = occurrenceFor(protocolInstance, targetStep.groupId(), protocol, siblings,
+                        completedStep.getCompletedAt());
+                if (findIn(siblings, occurrence, targetStep.id()) != null) {
+                    continue; // opening its group created it, as one of the group's first steps
                 }
             }
 
-            for (int i = 0; i < repeatCount; i++) {
-                OffsetDateTime instanceDueDate = dueDate;
-                if (i > 0 && repeatPeriod != null && repeatPeriodUnit != null) {
-                    instanceDueDate = addOffset(dueDate, repeatPeriod.longValue() * i, repeatPeriodUnit);
-                }
-
-                // tolerance-days is now the single grace window: missedDate = dueDate + tolerance.
-                OffsetDateTime instanceMissedDate = null;
-                if (targetStep.toleranceDays() != null) {
-                    instanceMissedDate = instanceDueDate.plusDays(targetStep.toleranceDays());
-                }
-
-                siblings.add(createStep(protocolInstance, targetStep.id(),
-                        i, instanceDueDate, instanceMissedDate,
-                        requiredBehavior));
-
-                log.info("Progressive instantiation: created step {} (repeat {}/{}) due at {} (triggered by {}, relationship={})",
-                        targetStep.id(), i, repeatCount, instanceDueDate,
+            for (StepInstance created : createRows(protocolInstance, targetStep, dueDate, occurrence)) {
+                siblings.add(created);
+                log.info("Progressive instantiation: created step {} (repeat {}) due at {} (triggered by {}, relationship={})",
+                        targetStep.id(), created.getRepeatIndex(), created.getDueDate(),
                         completedStep.getActionId(), edge.relationship());
             }
         }
+
+        openGroupsFollowing(protocolInstance, completedStep.getActionId(), completedStep.getCompletedAt(),
+                protocol, siblings);
+    }
+
+    /**
+     * Create a step's rows, attached to {@code occurrence}: one row, or {@code count} rows a
+     * {@code period} apart when the step repeats on its own {@code timing}. tolerance-days is the single
+     * grace window: missedDate = dueDate + tolerance.
+     *
+     * <p>A step created with no due date gets one row and no deadline. That happens only inside a group
+     * occurrence whose planned due date is not known yet.
+     */
+    private List<StepInstance> createRows(ProtocolInstance protocolInstance,
+                                          PlanDefinitionParser.StepMetadata targetStep,
+                                          OffsetDateTime dueDate, StepGroupInstance occurrence) {
+        int repeatCount = 1;
+        java.math.BigDecimal repeatPeriod = null;
+        String repeatPeriodUnit = null;
+        PlanDefinitionParser.TimingInfo timing = targetStep.timing();
+        if (dueDate != null && timing != null && timing.count() != null && timing.count() > 1) {
+            repeatCount = timing.count();
+            repeatPeriod = timing.period();
+            repeatPeriodUnit = timing.periodUnit();
+        }
+
+        List<StepInstance> created = new ArrayList<>(repeatCount);
+        for (int i = 0; i < repeatCount; i++) {
+            OffsetDateTime instanceDueDate = dueDate;
+            if (i > 0 && repeatPeriod != null && repeatPeriodUnit != null) {
+                instanceDueDate = addOffset(dueDate, repeatPeriod.longValue() * i, repeatPeriodUnit);
+            }
+
+            OffsetDateTime instanceMissedDate = null;
+            if (instanceDueDate != null && targetStep.toleranceDays() != null) {
+                instanceMissedDate = instanceDueDate.plusDays(targetStep.toleranceDays());
+            }
+
+            created.add(createStep(protocolInstance, targetStep.id(), i, instanceDueDate,
+                    instanceMissedDate, targetStep.requiredBehavior(), occurrence));
+        }
+        return created;
     }
 
     /**
@@ -390,6 +497,8 @@ public class StepInstanceService {
      */
     private String firstInFlightPrerequisite(List<String> prerequisiteIds,
                                              String completedActionId,
+                                             StepGroupInstance from,
+                                             ParsedProtocolCache.ParsedProtocol protocol,
                                              List<StepInstance> siblings) {
         for (String prerequisiteId : prerequisiteIds) {
             if (prerequisiteId.equals(completedActionId)) {
@@ -397,6 +506,7 @@ public class StepInstanceService {
             }
             boolean inFlight = siblings.stream()
                     .filter(s -> prerequisiteId.equals(s.getActionId()))
+                    .filter(s -> inScope(from, s, protocol))
                     .anyMatch(this::isOutstandingStep);
             if (inFlight) {
                 return prerequisiteId;
@@ -430,20 +540,21 @@ public class StepInstanceService {
      *
      * <p>Idempotent: a mandatory step that already has any step instance — in any state, whether
      * pre-existing or created earlier in this same transaction by progressive instantiation — is
-     * left alone.
+     * left alone. A backfilled step inside a group joins its group's occurrence.
      */
     private void backfillMissingMandatorySteps(StepInstance completedStep,
-                                               List<PlanDefinitionParser.StepMetadata> steps,
-                                               PlanDefinitionParser.DependencyGraph graph,
+                                               ParsedProtocolCache.ParsedProtocol protocol,
                                                List<StepInstance> siblings) {
         ProtocolInstance protocolInstance = completedStep.getProtocolInstance();
+        List<PlanDefinitionParser.StepMetadata> steps = protocol.steps();
 
         Set<String> observedStepIds = siblings.stream()
+                .filter(s -> inScope(completedStep.getStepGroupInstance(), s, protocol))
                 .map(StepInstance::getActionId)
                 .collect(Collectors.toSet());
 
         List<String> missingMustSteps = PlanDefinitionParser
-                .computeMustPredecessorSteps(observedStepIds, steps, graph).stream()
+                .computeMustPredecessorSteps(observedStepIds, steps, protocol.dependencyGraph()).stream()
                 .filter(stepId -> !observedStepIds.contains(stepId))
                 .sorted()
                 .toList();
@@ -466,6 +577,17 @@ public class StepInstanceService {
         for (String stepId : missingMustSteps) {
             PlanDefinitionParser.StepMetadata stepMetadata = stepsById.get(stepId);
 
+            StepGroupInstance occurrence = null;
+            if (stepMetadata != null && stepMetadata.groupId() != null) {
+                occurrence = enclosingOccurrence(completedStep.getStepGroupInstance(), stepMetadata.groupId());
+                if (occurrence == null) {
+                    occurrence = occurrenceFor(protocolInstance, stepMetadata.groupId(), protocol, siblings, dueDate);
+                }
+                if (findIn(siblings, occurrence, stepId) != null) {
+                    continue; // opening its group created it, as one of the group's first steps
+                }
+            }
+
             OffsetDateTime missedDate = null;
             if (stepMetadata != null && stepMetadata.toleranceDays() != null) {
                 missedDate = dueDate.plusDays(stepMetadata.toleranceDays());
@@ -473,12 +595,303 @@ public class StepInstanceService {
 
             // One instance (repeatIndex 0) regardless of the step's timing.repeat count: this is a
             // placeholder for work that was never recorded, not a scheduled recurrence.
-            siblings.add(createStep(protocolInstance, stepId, 0, dueDate, missedDate, "must"));
+            siblings.add(createStep(protocolInstance, stepId, 0, dueDate, missedDate, "must", occurrence));
 
             log.info("Backfilled unrecorded mandatory step {} as PENDING due at {} "
                             + "(revealed by completion of {}, instanceId={})",
                     stepId, dueDate, completedStep.getActionId(), protocolInstance.getId());
         }
+    }
+
+    // ── Step groups ──
+
+    /**
+     * Create the step an event brings into being when the step belongs to a group: attached to its
+     * group's occurrence, which is opened first if need be, together with any unopened enclosing ones.
+     *
+     * <p>Opening an occurrence creates its first mandatory steps, except the matched step itself: that
+     * one is created here, due at {@code now}, the event's single clock reading, as a step outside a
+     * group is. Created with the rest, it would take the occurrence's due date, which is unknown when
+     * the occurrence is opened this way, and so would never be judged.
+     *
+     * @param now        the event's clock reading, the new step's due date
+     * @param occurredAt the event's clinical time, recorded as the opening time of any occurrence it opens
+     */
+    public StepInstance createInitialGroupedStep(ProtocolInstance protocolInstance,
+                                                 PlanDefinitionParser.StepMetadata stepMetadata,
+                                                 OffsetDateTime now, OffsetDateTime occurredAt) {
+        ParsedProtocolCache.ParsedProtocol protocol = parsedProtocol(protocolInstance);
+        stepGroupService.lock(protocolInstance, protocol);
+        List<StepInstance> siblings = new ArrayList<>(
+                stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId()));
+
+        StepGroupInstance occurrence = occurrenceFor(protocolInstance, stepMetadata.groupId(), protocol,
+                siblings, occurredAt, stepMetadata.id());
+
+        // Another event's transaction may have opened the group, creating this step, since this event looked.
+        Optional<StepInstance> createdMeanwhile = siblings.stream()
+                .filter(s -> stepMetadata.id().equals(s.getActionId()) && s.getStepStatus() == StepStatus.NOT_STARTED)
+                .filter(s -> occurrence != null && s.getStepGroupInstance() != null
+                        && Objects.equals(s.getStepGroupInstance().getId(), occurrence.getId()))
+                .findFirst();
+        if (createdMeanwhile.isPresent()) {
+            return createdMeanwhile.get();
+        }
+
+        OffsetDateTime missedDate = stepMetadata.toleranceDays() != null
+                ? now.plusDays(stepMetadata.toleranceDays())
+                : null;
+        return createStep(protocolInstance, stepMetadata.id(), 0, now, missedDate,
+                stepMetadata.requiredBehavior(), occurrence);
+    }
+
+    /**
+     * The open occurrence of a group, opening it — and any unopened enclosing occurrences — when there
+     * is none yet. Returns null if the definition no longer declares the group.
+     *
+     * @param openedAt the clinical time of whatever needs the occurrence
+     */
+    private StepGroupInstance occurrenceFor(ProtocolInstance protocolInstance, String groupId,
+                                            ParsedProtocolCache.ParsedProtocol protocol,
+                                            List<StepInstance> siblings, OffsetDateTime openedAt) {
+        return occurrenceFor(protocolInstance, groupId, protocol, siblings, openedAt, null);
+    }
+
+    /**
+     * @param matchedStepId a step being created by an event, which opening an occurrence must not create
+     *                      as one of its first steps; null when there is none
+     */
+    private StepGroupInstance occurrenceFor(ProtocolInstance protocolInstance, String groupId,
+                                            ParsedProtocolCache.ParsedProtocol protocol,
+                                            List<StepInstance> siblings, OffsetDateTime openedAt,
+                                            String matchedStepId) {
+        PlanDefinitionParser.GroupMetadata group = protocol.group(groupId);
+        if (group == null) {
+            return null;
+        }
+        StepGroupInstance parent = group.parentGroupId() == null
+                ? null
+                : occurrenceFor(protocolInstance, group.parentGroupId(), protocol, siblings, openedAt, matchedStepId);
+
+        // Opening the parent may have opened this group too, as one of the parent's first members.
+        Optional<StepGroupInstance> existing = stepGroupService.find(protocolInstance, groupId, parent, 0);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        return openOccurrence(protocolInstance, group, parent,
+                plannedDueDate(protocolInstance, group, parent, protocol, siblings), openedAt, protocol, siblings,
+                matchedStepId);
+    }
+
+    /**
+     * Open an occurrence of a group and create what it holds from the start: its mandatory members with
+     * no predecessor inside the group. Steps are due at the occurrence's due date; nested groups open
+     * with their own planned due date. Later members arrive through progressive instantiation, with the
+     * due dates their own {@code relatedAction} offsets give them. Does nothing more when the occurrence
+     * already existed.
+     */
+    private StepGroupInstance openOccurrence(ProtocolInstance protocolInstance,
+                                             PlanDefinitionParser.GroupMetadata group,
+                                             StepGroupInstance parent, OffsetDateTime dueDate,
+                                             OffsetDateTime openedAt,
+                                             ParsedProtocolCache.ParsedProtocol protocol,
+                                             List<StepInstance> siblings,
+                                             String matchedStepId) {
+        StepGroupService.Opened opened = stepGroupService.findOrOpen(
+                protocolInstance, group.id(), parent, 0, dueDate, openedAt);
+        StepGroupInstance occurrence = opened.occurrence();
+        if (!opened.created()) {
+            return occurrence;
+        }
+
+        PlanDefinitionParser.EntryMembers entry = PlanDefinitionParser.entryMembers(
+                group.id(), protocol.steps(), protocol.groups(), protocol.dependencyGraph());
+        for (PlanDefinitionParser.StepMetadata member : entry.steps()) {
+            if (!member.id().equals(matchedStepId) && findIn(siblings, occurrence, member.id()) == null) {
+                siblings.addAll(createRows(protocolInstance, member, occurrence.getDueDate(), occurrence));
+            }
+        }
+        for (PlanDefinitionParser.GroupMetadata member : entry.groups()) {
+            if (stepGroupService.find(protocolInstance, member.id(), occurrence, 0).isEmpty()) {
+                openOccurrence(protocolInstance, member, occurrence,
+                        plannedDueDate(protocolInstance, member, occurrence, protocol, siblings),
+                        openedAt, protocol, siblings, matchedStepId);
+            }
+        }
+        return occurrence;
+    }
+
+    /**
+     * Open the mandatory groups that follow {@code prerequisiteId}, now that it has finished at
+     * {@code finishedAt}. A group with other prerequisites still in flight waits for them; each of their
+     * completions re-runs this. Optional groups are never opened in advance, only when one of their
+     * steps is matched.
+     */
+    private void openGroupsFollowing(ProtocolInstance protocolInstance, String prerequisiteId,
+                                     OffsetDateTime finishedAt,
+                                     ParsedProtocolCache.ParsedProtocol protocol,
+                                     List<StepInstance> siblings) {
+        for (PlanDefinitionParser.GroupDependency dependency
+                : protocol.dependencyGraph().groupSuccessorsOf(prerequisiteId)) {
+            PlanDefinitionParser.GroupMetadata group = dependency.group();
+            if (!group.isMandatory()) {
+                continue;
+            }
+            StepGroupInstance parent = group.parentGroupId() == null
+                    ? null
+                    : occurrenceFor(protocolInstance, group.parentGroupId(), protocol, siblings, finishedAt);
+            if (stepGroupService.find(protocolInstance, group.id(), parent, 0).isPresent()) {
+                continue;
+            }
+            OffsetDateTime dueDate = plannedDueDate(protocolInstance, group, parent, protocol, siblings);
+            if (dueDate == null) {
+                log.debug("Deferring group {} — another prerequisite is still in flight (instanceId={})",
+                        group.id(), protocolInstance.getId());
+                continue;
+            }
+            openOccurrence(protocolInstance, group, parent, dueDate, finishedAt, protocol, siblings, null);
+        }
+    }
+
+    /**
+     * When an occurrence of {@code group} is due, as the protocol plans it — never the time of the event
+     * that happened to open it, which would make a group judged late as soon as its second step arrived.
+     *
+     * <p>From the group's prerequisites when it has any: the latest of their finish times plus each
+     * edge's offset. A prerequisite still in flight means the date can't be known yet, so the answer is
+     * null; one with no row at all is ignored, as it is for steps. A group with no prerequisites takes
+     * its parent occurrence's due date, and a top-level one has none.
+     */
+    private OffsetDateTime plannedDueDate(ProtocolInstance protocolInstance,
+                                          PlanDefinitionParser.GroupMetadata group,
+                                          StepGroupInstance parent,
+                                          ParsedProtocolCache.ParsedProtocol protocol,
+                                          List<StepInstance> siblings) {
+        PlanDefinitionParser.DependencyGraph graph = protocol.dependencyGraph();
+        OffsetDateTime latest = null;
+        boolean anyFinished = false;
+        for (String prerequisiteId : graph.predecessorsOf(group.id())) {
+            PlanDefinitionParser.RelatedStepInfo edge = graph.groupSuccessorsOf(prerequisiteId).stream()
+                    .filter(d -> d.group().id().equals(group.id()))
+                    .map(PlanDefinitionParser.GroupDependency::edge)
+                    .findFirst()
+                    .orElse(null);
+            if (edge == null) {
+                continue;
+            }
+            Finish finish = finishOf(prerequisiteId, siblings);
+            if (finish.inFlight()) {
+                return null;
+            }
+            if (finish.finishedAt() == null) {
+                continue;
+            }
+            OffsetDateTime base = "after-start".equals(edge.relationship()) && finish.startedAt() != null
+                    ? finish.startedAt()
+                    : finish.finishedAt();
+            OffsetDateTime due = calculateDueDate(base, edge);
+            if (latest == null || due.isAfter(latest)) {
+                latest = due;
+            }
+            anyFinished = true;
+        }
+        if (anyFinished) {
+            return latest;
+        }
+        return parent != null ? parent.getDueDate() : null;
+    }
+
+    /** Where a prerequisite stands: in flight, finished (with when it started and finished), or neither. */
+    private record Finish(boolean inFlight, OffsetDateTime startedAt, OffsetDateTime finishedAt) {
+        static final Finish NONE = new Finish(false, null, null);
+        static final Finish IN_FLIGHT = new Finish(true, null, null);
+    }
+
+    private Finish finishOf(String prerequisiteId, List<StepInstance> siblings) {
+        List<StepInstance> rows = siblings.stream().filter(s -> prerequisiteId.equals(s.getActionId())).toList();
+        Optional<StepInstance> completed = rows.stream()
+                .filter(s -> s.getStepStatus() == StepStatus.COMPLETED && s.getCompletedAt() != null)
+                .max(Comparator.comparing(StepInstance::getCompletedAt));
+        if (completed.isPresent()) {
+            StepInstance row = completed.get();
+            return new Finish(false, row.getDueDate(), row.getCompletedAt());
+        }
+        return rows.stream().anyMatch(this::isOutstandingStep) ? Finish.IN_FLIGHT : Finish.NONE;
+    }
+
+    /** Whether {@code row} counts for work in {@code from}: inside the shared occurrence when their steps share a group. */
+    private static boolean inScope(StepGroupInstance from, StepInstance row,
+                                   ParsedProtocolCache.ParsedProtocol protocol) {
+        StepGroupInstance scope = innermostSharedOccurrence(from, row.getActionId(), protocol);
+        return scope == null || isWithin(row.getStepGroupInstance(), scope);
+    }
+
+    /** {@code from}'s occurrence of the innermost group that also encloses {@code actionId}, or null. */
+    private static StepGroupInstance innermostSharedOccurrence(StepGroupInstance from, String actionId,
+                                                               ParsedProtocolCache.ParsedProtocol protocol) {
+        PlanDefinitionParser.StepMetadata step = protocol.step(actionId);
+        if (from == null || step == null || step.groupId() == null) {
+            return null;
+        }
+        Set<String> enclosing = new HashSet<>();
+        for (String groupId = step.groupId(); groupId != null; ) {
+            enclosing.add(groupId);
+            PlanDefinitionParser.GroupMetadata group = protocol.group(groupId);
+            groupId = group != null ? group.parentGroupId() : null;
+        }
+        for (StepGroupInstance o = from; o != null; o = o.getParentGroupInstance()) {
+            if (enclosing.contains(o.getGroupActionId())) {
+                return o;
+            }
+        }
+        return null;
+    }
+
+    /** {@code from} or the occurrence around it that belongs to {@code groupId}, or null when none does. */
+    private static StepGroupInstance enclosingOccurrence(StepGroupInstance from, String groupId) {
+        for (StepGroupInstance o = from; o != null; o = o.getParentGroupInstance()) {
+            if (groupId.equals(o.getGroupActionId())) {
+                return o;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isWithin(StepGroupInstance occurrence, StepGroupInstance scope) {
+        for (StepGroupInstance o = occurrence; o != null; o = o.getParentGroupInstance()) {
+            if (Objects.equals(o.getId(), scope.getId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** The completed step's own occurrence, when the dependent belongs to the same group. */
+    private static StepGroupInstance sharedOccurrence(StepInstance completedStep,
+                                                      PlanDefinitionParser.StepMetadata dependent) {
+        StepGroupInstance occurrence = completedStep.getStepGroupInstance();
+        if (occurrence == null || dependent.groupId() == null) {
+            return null;
+        }
+        return dependent.groupId().equals(occurrence.getGroupActionId()) ? occurrence : null;
+    }
+
+    /** The row for {@code actionId} in {@code occurrence} among {@code siblings}, if there is one. */
+    private static StepInstance findIn(List<StepInstance> siblings, StepGroupInstance occurrence, String actionId) {
+        if (occurrence == null) {
+            return null;
+        }
+        return siblings.stream()
+                .filter(s -> actionId.equals(s.getActionId()))
+                .filter(s -> s.getStepGroupInstance() != null
+                        && Objects.equals(s.getStepGroupInstance().getId(), occurrence.getId()))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private ParsedProtocolCache.ParsedProtocol parsedProtocol(ProtocolInstance protocolInstance) {
+        ProtocolDefinition protocolDef = protocolInstance.getProtocolDefinition();
+        return parsedProtocolCache.get(protocolDef.getId(), () -> protocolDef.getDefinition().toString());
     }
 
     private OffsetDateTime calculateDueDate(OffsetDateTime baseTime,

@@ -136,7 +136,7 @@ class MatcherEngineTest {
             mockParserReturnsNoCondition(protocolDef, "bp-check");
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstance.getId(), "bp-check"))
+            when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("bp-check"), any()))
                     .thenReturn(step);
 
             engine.processInboundEvent(event);
@@ -174,7 +174,7 @@ class MatcherEngineTest {
             when(clinicalEventTimeExtractor.extract(eq(ResourceType.Observation), any())).thenReturn(clinicalTime);
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstance.getId(), "bp-check"))
+            when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("bp-check"), any()))
                     .thenReturn(step);
 
             engine.processInboundEvent(event);
@@ -226,8 +226,8 @@ class MatcherEngineTest {
                     .thenReturn(instance1);
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef2), any()))
                     .thenReturn(instance2);
-            when(stepInstanceService.findActionableStep(instance1.getId(), "action-a")).thenReturn(step1);
-            when(stepInstanceService.findActionableStep(instance2.getId(), "action-b")).thenReturn(step2);
+            when(stepInstanceService.findActionableStep(eq(instance1.getId()), eq("action-a"), any())).thenReturn(step1);
+            when(stepInstanceService.findActionableStep(eq(instance2.getId()), eq("action-b"), any())).thenReturn(step2);
 
             engine.processInboundEvent(event);
 
@@ -264,7 +264,7 @@ class MatcherEngineTest {
             when(protocolDefinitionService.findById(protocolDefId)).thenReturn(protocolDef);
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstance.getId(), "condition-action"))
+            when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("condition-action"), any()))
                     .thenReturn(step);
 
             engine.processInboundEvent(event);
@@ -295,7 +295,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(protocolInstanceService.findById(protocolInstanceId)).thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstanceId, "explicit-action"))
+            when(stepInstanceService.findActionableStep(eq(protocolInstanceId), eq("explicit-action"), any()))
                     .thenReturn(step);
 
             engine.processInboundEvent(event);
@@ -324,7 +324,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(protocolInstanceService.findById(protocolInstanceId)).thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstanceId, "new-action")).thenReturn(null);
+            when(stepInstanceService.findActionableStep(eq(protocolInstanceId), eq("new-action"), any())).thenReturn(null);
             // createInitialStep reads the definition off the instance, so no findById stub is needed
             mockParserReturnsActionForInitialStep(protocolDef, "new-action", 3, "must");
             when(stepInstanceService.createStep(eq(protocolInstance), eq("new-action"),
@@ -336,6 +336,35 @@ class MatcherEngineTest {
                     eq(0), any(), any(), eq("must"));
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()), any());
             verify(intelligenceActionEvaluator).evaluateOnCompletion(eq(newStep), any());
+        }
+
+        @Test
+        void explicitMatch_aStepInAGroup_isCreatedInItsGroupsOccurrence() {
+            UUID protocolInstanceId = UUID.randomUUID();
+            ProtocolDefinition protocolDef = buildProtocolDefinition(UUID.randomUUID());
+            ProtocolInstance protocolInstance = buildProtocolInstance(protocolDef);
+            protocolInstance.setId(protocolInstanceId);
+            StepInstance newStep = buildActionableStep(protocolInstance, "bp");
+
+            CloudEventMessage event = buildEvent();
+            event.setActionid("bp");
+            event.setProtocolinstanceid(protocolInstanceId.toString());
+            MatcherEventLog eventLog = buildEventLog(ProcessingStatus.ZERO_MATCH);
+
+            when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
+            when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
+            when(protocolInstanceService.findById(protocolInstanceId)).thenReturn(protocolInstance);
+            when(stepInstanceService.findActionableStep(eq(protocolInstanceId), eq("bp"), any())).thenReturn(null);
+            PlanDefinitionParser.StepMetadata bp = new PlanDefinitionParser.StepMetadata("bp", "BP",
+                    List.of(), List.of(), null, null, "must", List.of(), "visit-2");
+            stubProtocol(List.of(bp));
+            when(stepInstanceService.createInitialGroupedStep(eq(protocolInstance), eq(bp), any(), any()))
+                    .thenReturn(newStep);
+
+            engine.processInboundEvent(event);
+
+            verify(stepInstanceService, never()).createStep(any(), any(), anyInt(), any(), any(), any());
+            verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()), any());
         }
     }
 
@@ -362,7 +391,7 @@ class MatcherEngineTest {
             mockParserReturnsNoCondition(protocolDef, "follow-up");
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(existingInstance);
-            when(stepInstanceService.findActionableStep(existingInstance.getId(), "follow-up"))
+            when(stepInstanceService.findActionableStep(eq(existingInstance.getId()), eq("follow-up"), any()))
                     .thenReturn(step);
 
             engine.processInboundEvent(event);
@@ -460,7 +489,7 @@ class MatcherEngineTest {
                             List.of(), null, 5, "must", List.of())));
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstance.getId(), "first-step"))
+            when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("first-step"), any()))
                     .thenReturn(null);
             when(stepInstanceService.createStep(eq(protocolInstance), eq("first-step"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);
@@ -506,7 +535,7 @@ class MatcherEngineTest {
             when(clinicalEventTimeExtractor.extract(eq(ResourceType.Consent), any())).thenReturn(threeHoursAhead);
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstance.getId(), "consent-request"))
+            when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("consent-request"), any()))
                     .thenReturn(null);
             when(stepInstanceService.createStep(eq(protocolInstance), eq("consent-request"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);
@@ -546,7 +575,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(protocolInstanceService.findById(protocolInstanceId)).thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstanceId, "new-action")).thenReturn(null);
+            when(stepInstanceService.findActionableStep(eq(protocolInstanceId), eq("new-action"), any())).thenReturn(null);
             mockParserReturnsActionForInitialStep(protocolDef, "new-action", 3, "must");
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
             when(clinicalEventTimeExtractor.extract(eq(ResourceType.Observation), any())).thenReturn(threeHoursAhead);
@@ -592,7 +621,7 @@ class MatcherEngineTest {
             when(clinicalEventTimeExtractor.extract(eq(ResourceType.Encounter), any())).thenReturn(anHourAgo);
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(protocolInstance.getId(), "first-step"))
+            when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("first-step"), any()))
                     .thenReturn(null);
             when(stepInstanceService.createStep(eq(protocolInstance), eq("first-step"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);

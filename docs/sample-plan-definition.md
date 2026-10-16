@@ -649,6 +649,7 @@ Each `definitionCanonical` referenced in the PlanDefinition must have a register
 | Action ordering | `relatedAction[].actionId` + `offsetDuration` | The step names its **prerequisite** — `offsetDuration` is how long after that prerequisite this step is due |
 | ActivityDefinition type | `kind` | `CommunicationRequest`, `Task`, `ServiceRequest` |
 | Canonical reference format | `definitionCanonical` | `<url>|<version>` |
+| Step group | `groupingBehavior` on a `step`-typed action with child actions | `logical-group` makes it a group (see [Step Groups](#step-groups)); `visual-group` and `sentence-group` keep it a plain step |
 
 `requiredBehavior` note: **only `must` is mandatory, and an absent value is not.** `must` drives the "must"-only predecessor backfill gating in `StepInstanceService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`), and it is the only value that gets an SLA schedule: a step that is not `must` is never pre-created by progressive instantiation (only materialized on the fly if its own trigger fires), gets no `step_sla_state_transition` rows, and can therefore be neither `OVERDUE` nor `MISSED` — nothing was required of it, so there is nothing for it to breach. The one definition is `RequiredBehavior.isMandatory`.
 
@@ -665,3 +666,78 @@ Consequently **`tolerance-days` on an action that is not `must` is rejected at l
 | 3 | Yes | No | Yes | `TriggerIndex` row (empty) + in-memory condition check |
 | 4 | Yes | Yes | Yes | `TriggerIndex` rows per code + in-memory condition check |
 | 5 | No | — | Yes | `extractConditionOnlyTriggers()` — evaluated on every event |
+
+---
+
+## Step Groups
+
+A step group is a set of steps that belong together clinically, such as one antenatal-care visit. It is written as a `step`-typed action with `groupingBehavior: logical-group`, child actions and no trigger. The group itself is never matched to an event; only its steps are. How the Matcher Service opens and tracks a group is in [Architecture Overview §6.5](architecture-overview.md#65-step-groups).
+
+```json
+{
+  "id": "anc-visit-2",
+  "title": "ANC visit 2",
+  "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
+  "groupingBehavior": "logical-group",
+  "requiredBehavior": "must",
+  "relatedAction": [
+    {
+      "actionId": "anc-registration",
+      "relationship": "after-end",
+      "offsetDuration": {
+        "value": 6, "unit": "wk",
+        "system": "http://unitsofmeasure.org", "code": "wk"
+      }
+    }
+  ],
+  "action": [
+    {
+      "id": "anc2-bp",
+      "title": "Blood pressure",
+      "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
+      "requiredBehavior": "must",
+      "extension": [
+        { "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days", "valueInteger": 14 }
+      ],
+      "trigger": [{
+        "type": "named-event", "name": "anc2-bp-trigger",
+        "data": [{ "type": "Observation",
+                   "codeFilter": [{ "path": "code", "code": [{ "system": "http://loinc.org", "code": "85354-9" }] }] }]
+      }]
+    },
+    {
+      "id": "anc2-weight",
+      "title": "Body weight",
+      "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
+      "requiredBehavior": "must",
+      "extension": [
+        { "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days", "valueInteger": 14 }
+      ],
+      "trigger": [{
+        "type": "named-event", "name": "anc2-weight-trigger",
+        "data": [{ "type": "Observation",
+                   "codeFilter": [{ "path": "code", "code": [{ "system": "http://loinc.org", "code": "29463-7" }] }] }]
+      }]
+    },
+    {
+      "id": "anc2-counselling",
+      "title": "Counselling",
+      "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
+      "requiredBehavior": "could",
+      "trigger": [{
+        "type": "named-event", "name": "anc2-counselling-trigger",
+        "data": [{ "type": "Procedure",
+                   "codeFilter": [{ "path": "code", "code": [{ "system": "http://snomed.info/sct", "code": "61310001" }] }] }]
+      }]
+    }
+  ]
+}
+```
+
+What this example does, given a mandatory `anc-registration` step elsewhere in the PlanDefinition:
+- **When registration completes,** the visit opens with a planned due date six weeks later. Its mandatory steps with no predecessor inside the group, BP and weight, are created with that due date, and with their own `tolerance-days` they can go `OVERDUE` and then `MISSED`.
+- **Counselling is optional,** so it is never created in advance: only when its own event arrives.
+- **If a BP event arrives before registration,** the visit opens then, with no planned due date. Weight is then created without a due date or deadline, and is never judged.
+- **A second BP event** after the first is recorded as a further completed row in the same visit.
+
+The Protocol Service rejects at load a group that has a trigger or no step, a `selectionBehavior` other than `all`, or `tolerance-days` on an optional group. It also refuses, until they are built, `timing` or the `cycle-boundary` extension on a group (repeating groups), `tolerance-days` on a group (group deadlines), a `fire-event` child of a group, and any action that follows a group.

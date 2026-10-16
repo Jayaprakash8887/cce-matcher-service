@@ -175,13 +175,13 @@ public class MatcherEngine {
         ProtocolInstance protocolInstance = protocolInstanceService.findById(protocolInstanceId);
 
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
-        StepInstance step = stepInstanceService.findActionableStep(protocolInstanceId, actionId);
+        OffsetDateTime occurredAt = notAfter(resolveOccurredAt(event), now);
+        StepInstance step = stepInstanceService.findActionableStep(protocolInstanceId, actionId, occurredAt);
         if (step == null) {
-            step = createInitialStep(protocolInstance, actionId, now);
+            step = createInitialStep(protocolInstance, actionId, now, occurredAt);
         }
 
-        stepInstanceService.completeStep(step, eventLog.getId(), event.getSource(),
-                notAfter(resolveOccurredAt(event), now));
+        stepInstanceService.completeStep(step, eventLog.getId(), event.getSource(), occurredAt);
 
         // Evaluate intelligence actions after step completion
         intelligenceActionEvaluator.evaluateOnCompletion(step, event.getData());
@@ -262,9 +262,9 @@ public class MatcherEngine {
         String actionId = match.actionId();
 
         StepInstance step = stepInstanceService.findActionableStep(
-                protocolInstance.getId(), actionId);
+                protocolInstance.getId(), actionId, occurredAt);
         if (step == null) {
-            step = createInitialStep(protocolInstance, actionId, now);
+            step = createInitialStep(protocolInstance, actionId, now, occurredAt);
         }
 
         stepInstanceService.completeStep(step, eventLog.getId(), event.getSource(), occurredAt);
@@ -321,12 +321,20 @@ public class MatcherEngine {
         return occurredAt.isAfter(now) ? now : occurredAt;
     }
 
-    /** A step the event itself brings into being: due at {@code now}, the event's single clock reading. */
-    private StepInstance createInitialStep(ProtocolInstance protocolInstance, String actionId, OffsetDateTime now) {
+    /**
+     * A step the event itself brings into being: due at {@code now}, the event's single clock reading. A
+     * step inside a step group is attached to its group's occurrence, which may have to be opened first.
+     */
+    private StepInstance createInitialStep(ProtocolInstance protocolInstance, String actionId,
+                                           OffsetDateTime now, OffsetDateTime occurredAt) {
         PlanDefinitionParser.StepMetadata stepMetadata = parsedProtocolCache
                 .get(protocolInstance.getProtocolDefinition().getId(),
                         () -> protocolInstance.getProtocolDefinition().getDefinition().toString())
                 .step(actionId);
+
+        if (stepMetadata != null && stepMetadata.groupId() != null) {
+            return stepInstanceService.createInitialGroupedStep(protocolInstance, stepMetadata, now, occurredAt);
+        }
 
         OffsetDateTime missedDate = null;
         String requiredBehavior = null;

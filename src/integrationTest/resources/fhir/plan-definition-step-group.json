@@ -1,0 +1,98 @@
+{
+  "resourceType": "PlanDefinition",
+  "id": "step-group-visit",
+  "url": "http://openphc.org/PlanDefinition/step-group-visit",
+  "version": "1.0.0",
+  "name": "StepGroupVisit",
+  "title": "One visit as a step group",
+  "status": "active",
+  "description": "Fixture for step-group concurrency: one mandatory visit group whose two mandatory steps, BP and weight, have no predecessor inside the group, so opening the visit through either creates the other.",
+  "action": [
+    {
+      "id": "visit",
+      "title": "Visit",
+      "requiredBehavior": "must",
+      "groupingBehavior": "logical-group",
+      "type": {
+        "coding": [
+          {
+            "system": "http://openphc.org/fhir/CodeSystem/action-type",
+            "code": "step"
+          }
+        ]
+      },
+      "action": [
+        {
+          "id": "bp",
+          "title": "Blood pressure",
+          "requiredBehavior": "must",
+          "trigger": [
+            {
+              "type": "named-event",
+              "name": "bp-trigger",
+              "data": [
+                {
+                  "type": "Observation",
+                  "codeFilter": [
+                    {
+                      "path": "code",
+                      "code": [
+                        {
+                          "system": "http://loinc.org",
+                          "code": "85354-9"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "type": {
+            "coding": [
+              {
+                "system": "http://openphc.org/fhir/CodeSystem/action-type",
+                "code": "step"
+              }
+            ]
+          }
+        },
+        {
+          "id": "weight",
+          "title": "Body weight",
+          "requiredBehavior": "must",
+          "trigger": [
+            {
+              "type": "named-event",
+              "name": "weight-trigger",
+              "data": [
+                {
+                  "type": "Observation",
+                  "codeFilter": [
+                    {
+                      "path": "code",
+                      "code": [
+                        {
+                          "system": "http://loinc.org",
+                          "code": "29463-7"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ],
+          "type": {
+            "coding": [
+              {
+                "system": "http://openphc.org/fhir/CodeSystem/action-type",
+                "code": "step"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

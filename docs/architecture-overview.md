@@ -751,7 +751,7 @@ All execution and evaluation context is stored in a single row — no FK constra
 
 ### 6.4 Flat Step Model (Nested Actions Flattened)
 
-Nested `PlanDefinition.action.action[]` entries with type `"step"` are **flattened** into peer-level steps at parse time by `extractSteps()`. There is no parent-child hierarchy in the domain model — all steps (top-level and nested) are stored uniformly in `step_instance` without any `parent_step_id`. Relationships between steps are expressed exclusively via `relatedSteps` (derived from FHIR `relatedAction`).
+Nested `PlanDefinition.action.action[]` entries with type `"step"` are **flattened** into peer-level steps at parse time by `extractSteps()`. There is no parent-child hierarchy between steps — all steps (top-level and nested) are stored uniformly in `step_instance` without any `parent_step_id`. Relationships between steps are expressed exclusively via `relatedSteps` (derived from FHIR `relatedAction`). The one exception is an action with `groupingBehavior: logical-group`: it is a step group, not a step, and is never flattened into one (§6.5).
 
 **Direction of `relatedAction`:** it is a **relative** pointer — `relationship` describes the *declaring* action's relationship to the referenced one, so which of the two comes first depends on the family (`PlanDefinitionParser.classifyRelationship`):
 
@@ -766,9 +766,9 @@ Both ordering families are normalized into one directed graph by `PlanDefinition
 `concurrent*` edges and edges naming an action the definition does not declare establish nothing. Both are inert. Reporting them at load time is the CCE Protocol Service's responsibility — `PlanDefinitionParser.findUnorderedRelationships` / `findDanglingRelatedActions` exist for that purpose — so an author who expected one to sequence steps gets told, instead of silently getting a disconnected graph.
 
 **Key design decisions:**
-- `StepMetadata` is a flat record with 9 fields (no `subSteps` list): `id`, `title`, `triggers`, `relatedSteps`, `timing`, `toleranceDays`, `requiredBehavior`, `intelligenceActions`, `parentActionId`
-- Nesting is **organizational only** — it groups a sub-step under its enclosing action but does **not** create an implicit `relatedStep`/dependency link. Ordering between a parent and its sub-steps (and among sub-steps) must be expressed explicitly via `relatedAction`. A sub-step with no explicit prerequisite is created independently whenever its own trigger fires (`MatcherEngine.createInitialStep`), exactly like a top-level step — it does not wait for its parent to complete. Whether a sub-step waits on its parent is the protocol author's clinical decision, expressed with `relatedAction`.
-- `parentActionId` records nesting-group membership only. It is **not** used to create step dependencies or `relatedAction` links.
+- `StepMetadata` is a flat record with 9 fields (no `subSteps` list): `id`, `title`, `triggers`, `relatedSteps`, `timing`, `toleranceDays`, `requiredBehavior`, `intelligenceActions`, `groupId`
+- Plain nesting is **organizational only** — it groups a sub-step under its enclosing action but does **not** create an implicit `relatedStep`/dependency link. Ordering between a parent and its sub-steps (and among sub-steps) must be expressed explicitly via `relatedAction`. A sub-step with no explicit prerequisite is created independently whenever its own trigger fires (`MatcherEngine.createInitialStep`), exactly like a top-level step — it does not wait for its parent to complete. Whether a sub-step waits on its parent is the protocol author's clinical decision, expressed with `relatedAction`.
+- `groupId` is the step's nearest enclosing step group, or null outside any group (§6.5). Plain nesting under a step records nothing.
 - A sub-step whose `relatedAction` names a sibling as its prerequisite is flattened as-is and created progressively via standard `createDependentSteps()` logic
 - **Fan-in** — a step may declare several prerequisites. It is instantiated only once none of the others is still outstanding (`step_status=NOT_STARTED` with `sla_status` still null or `OVERDUE`), so its due date anchors to the last prerequisite to finish rather than whichever completed first. A prerequisite with no `step_instance` row at all does not block, since waiting on work that may never be recorded would strand the dependent step permanently.
 - All trigger indexing uses the step's **plain action ID** (e.g., `"anc-visit-1-referral"`)
@@ -825,9 +825,9 @@ Given this PlanDefinition structure:
 ```
 
 `extractSteps()` produces 3 flat `StepMetadata` entries:
-1. `anc-visit-1` — top-level step with its trigger; `parentActionId: null`
-2. `anc-visit-1-referral` — flattened with no `relatedSteps` of its own and `parentActionId: "anc-visit-1"` (nesting-group membership only — no implicit dependency on the parent). It has its own trigger (`ServiceRequest`), so it is created independently whenever that trigger fires rather than waiting for `anc-visit-1` to complete.
-3. `anc-visit-1-referral-ack` — flattened with `relatedSteps: [{actionId: "anc-visit-1-referral", relationship: "after-end"}]` (its own explicit `relatedAction`, naming its prerequisite) and `parentActionId: "anc-visit-1"`; created progressively when `anc-visit-1-referral` completes
+1. `anc-visit-1` — top-level step with its trigger
+2. `anc-visit-1-referral` — flattened with no `relatedSteps` of its own and no implicit dependency on its parent. It has its own trigger (`ServiceRequest`), so it is created independently whenever that trigger fires rather than waiting for `anc-visit-1` to complete.
+3. `anc-visit-1-referral-ack` — flattened with `relatedSteps: [{actionId: "anc-visit-1-referral", relationship: "after-end"}]` (its own explicit `relatedAction`, naming its prerequisite); created progressively when `anc-visit-1-referral` completes
 
 The intelligence action (`anc-visit-1-escalation`) is extracted into `anc-visit-1`'s `intelligenceActions` list.
 
@@ -862,6 +862,27 @@ All steps (regardless of original nesting level) are indexed in `trigger_index` 
 | `anc-visit-1` | Top-level action |
 | `anc-visit-1-referral` | Originally nested under anc-visit-1, now a peer |
 | `anc-visit-1-referral-ack` | Originally nested under anc-visit-1, now a peer |
+
+### 6.5 Step Groups
+
+An action typed `step` with `groupingBehavior: logical-group` is a **step group**: a set of steps that belong together clinically, such as one antenatal-care visit. A group is never matched to an event and never becomes a `StepMetadata`; only its steps do (`PlanDefinitionParser.extractGroups` returns groups separately). Each occurrence of a group for an enrollment is one `step_group_instance` row, nested groups point to their parent occurrence, and each step row points to its direct group's occurrence through `step_instance.step_group_instance_id`. The design is in [design-repeating-step-groups.md](design-repeating-step-groups.md), and what is built when in [implementation-plan-step-groups.md](implementation-plan-step-groups.md).
+
+**Opening an occurrence.** A group has no trigger, so something else opens it:
+- an event for one of its steps, when the group has no occurrence yet: `MatcherEngine.createInitialStep` opens it, and any unopened enclosing occurrences, and attaches the new step to it;
+- its predecessor step completing, when the group follows a step (progressive instantiation);
+- its parent occurrence opening, when it is a mandatory member of the parent with no predecessor inside it.
+
+Opening an occurrence creates its mandatory entry steps (its members with no predecessor inside the group) and opens its entry nested groups. An optional group is never opened in advance, only when one of its steps is matched.
+
+**Due dates.** An occurrence's due date is the one the protocol plans: its predecessor's completion plus the `relatedAction` offset, or its parent occurrence's due date. It is never the time of the event that happened to open it, which would make the group's later steps late as soon as they arrived. Steps created with the occurrence take its due date. When none can be worked out, for a top-level group with no predecessor for example, they get no due date and no `step_sla_state_transition` rows, so they show as pending and are never judged.
+
+**Which row an event completes.** A step in a group is completed only in the group's latest cycle, whatever the event's clinical time; when that cycle has no open row for it, the event adds a further completed row there. A repeated step outside any group completes the open row whose due date is nearest the event's clinical time.
+
+**Progression and checks.** Progressive instantiation deduplicates within an occurrence. `detectOrderViolations`, `backfillMissingMandatorySteps` and the fan-in wait look up a predecessor that shares a group with the completed step only inside that shared occurrence, so one cycle never sees another's rows, and a missing predecessor is backfilled into it.
+
+**Locking.** Every group decision runs under a `PESSIMISTIC_WRITE` lock on the enrollment's `protocol_instance` row (`ProtocolInstanceRepository.findByIdForUpdate`), taken only when the protocol has groups. Two events for one patient processed at once can't open the same occurrence twice or create the same step in it twice: the second, once it holds the lock, uses the row the first created.
+
+**Not built yet.** A group is never recorded as complete or closed: `completed_at` and `closed_at` stay null. The Protocol Service refuses at load a repeating group (`timing` or the `cycle-boundary` extension), a deadline on a group (`tolerance-days`), an intelligence action on a group, and anything that follows a group. A match on a group's action id, from a definition loaded before those checks existed, is ignored: a group has no `StepMetadata`, so Tier 1 skips it.
 
 ## 7. Security
 

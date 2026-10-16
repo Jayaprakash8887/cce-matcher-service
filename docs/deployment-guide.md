@@ -245,6 +245,7 @@ Flyway manages all schema migrations automatically on application startup.
 - `V1__initial_schema.sql` creates all 12 tables with their indexes and constraints
 - `V2__upgrade_from_monolith_schema.sql` transforms a 1.x `ccedb` into that shape, and is a no-op on a new one
 - `V3__met_condition_reached.sql` and `V4__optional_steps_have_no_schedule.sql` follow the SLA rules of this release: `MET` becomes a scheduled row, and only mandatory steps carry a schedule at all. **Sequencing note:** roll `cce-step-sla-service` to this release *before* this service, or its old build jams on a `transition_type` it cannot map
+- `V8__step_groups.sql` adds step groups: the `step_group_instance` table, and a `step_group_instance_id` on `step_instance`, `step_sla_state_transition`, `deviation` and `intelligence_event_log`. Needs PostgreSQL 15 or later (`NULLS NOT DISTINCT`). **Sequencing note:** run it before any service on a `cce-common-util` build that maps `step_instance.step_group_instance_id`; the Step SLA and Collector services validate their mappings at startup and fail without the column. Update the analytics CDC (`cce-data-pipeline/schema/10-step-groups-upgrade.sql`) before loading a protocol with step groups
 - `ddl-auto=validate` ensures Hibernate validates entity mappings against the actual schema
 - **Production:** set `spring.flyway.baseline-on-migrate=false` (default in the prod profile)
 
