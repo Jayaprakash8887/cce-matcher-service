@@ -176,10 +176,7 @@ public class MatcherEngine {
 
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         OffsetDateTime occurredAt = notAfter(resolveOccurredAt(event), now);
-        StepInstance step = stepInstanceService.findActionableStep(protocolInstanceId, actionId, occurredAt);
-        if (step == null) {
-            step = createInitialStep(protocolInstance, actionId, now, occurredAt);
-        }
+        StepInstance step = stepForEvent(protocolInstance, actionId, now, occurredAt);
 
         stepInstanceService.completeStep(step, eventLog.getId(), event.getSource(), occurredAt);
 
@@ -261,11 +258,7 @@ public class MatcherEngine {
 
         String actionId = match.actionId();
 
-        StepInstance step = stepInstanceService.findActionableStep(
-                protocolInstance.getId(), actionId, occurredAt);
-        if (step == null) {
-            step = createInitialStep(protocolInstance, actionId, now, occurredAt);
-        }
+        StepInstance step = stepForEvent(protocolInstance, actionId, now, occurredAt);
 
         stepInstanceService.completeStep(step, eventLog.getId(), event.getSource(), occurredAt);
 
@@ -322,20 +315,31 @@ public class MatcherEngine {
     }
 
     /**
-     * A step the event itself brings into being: due at {@code now}, the event's single clock reading. A
-     * step inside a step group is attached to its group's occurrence, which may have to be opened first.
+     * The row an event for {@code actionId} completes, created when none is awaiting it. A step the event
+     * itself brings into being is due at {@code now}, the event's single clock reading.
+     *
+     * <p>A step in a step group is left to {@link StepInstanceService#findOrCreateGroupedStep}, which
+     * first decides, under the enrollment's lock, which occurrence of the group the event goes to.
+     * Outside any group, the open row with the nearest due date is completed, or a new one created.
      */
-    private StepInstance createInitialStep(ProtocolInstance protocolInstance, String actionId,
-                                           OffsetDateTime now, OffsetDateTime occurredAt) {
+    private StepInstance stepForEvent(ProtocolInstance protocolInstance, String actionId,
+                                      OffsetDateTime now, OffsetDateTime occurredAt) {
         PlanDefinitionParser.StepMetadata stepMetadata = parsedProtocolCache
                 .get(protocolInstance.getProtocolDefinition().getId(),
                         () -> protocolInstance.getProtocolDefinition().getDefinition().toString())
                 .step(actionId);
 
         if (stepMetadata != null && stepMetadata.groupId() != null) {
-            return stepInstanceService.createInitialGroupedStep(protocolInstance, stepMetadata, now, occurredAt);
+            return stepInstanceService.findOrCreateGroupedStep(protocolInstance, stepMetadata, now, occurredAt);
         }
 
+        StepInstance open = stepInstanceService.findActionableStep(protocolInstance.getId(), actionId, occurredAt);
+        return open != null ? open : createInitialStep(protocolInstance, actionId, stepMetadata, now);
+    }
+
+    /** A step outside any group that the event itself brings into being: due at {@code now}. */
+    private StepInstance createInitialStep(ProtocolInstance protocolInstance, String actionId,
+                                           PlanDefinitionParser.StepMetadata stepMetadata, OffsetDateTime now) {
         OffsetDateTime missedDate = null;
         String requiredBehavior = null;
 

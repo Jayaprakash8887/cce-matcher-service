@@ -264,6 +264,7 @@ class MatcherEngineTest {
             when(protocolDefinitionService.findById(protocolDefId)).thenReturn(protocolDef);
             when(protocolInstanceService.enrollPatient(eq("patient-1"), eq(protocolDef), any()))
                     .thenReturn(protocolInstance);
+            mockParserReturnsNoCondition(protocolDef, "condition-action");
             when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("condition-action"), any()))
                     .thenReturn(step);
 
@@ -295,6 +296,7 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(protocolInstanceService.findById(protocolInstanceId)).thenReturn(protocolInstance);
+            mockParserReturnsNoCondition(protocolDef, "explicit-action");
             when(stepInstanceService.findActionableStep(eq(protocolInstanceId), eq("explicit-action"), any()))
                     .thenReturn(step);
 
@@ -354,15 +356,16 @@ class MatcherEngineTest {
             when(eventLogService.isDuplicate(anyString(), anyString())).thenReturn(false);
             when(eventLogService.recordEvent(event, ProcessingStatus.ZERO_MATCH)).thenReturn(eventLog);
             when(protocolInstanceService.findById(protocolInstanceId)).thenReturn(protocolInstance);
-            when(stepInstanceService.findActionableStep(eq(protocolInstanceId), eq("bp"), any())).thenReturn(null);
             PlanDefinitionParser.StepMetadata bp = new PlanDefinitionParser.StepMetadata("bp", "BP",
                     List.of(), List.of(), null, null, "must", List.of(), "visit-2");
             stubProtocol(List.of(bp));
-            when(stepInstanceService.createInitialGroupedStep(eq(protocolInstance), eq(bp), any(), any()))
+            when(stepInstanceService.findOrCreateGroupedStep(eq(protocolInstance), eq(bp), any(), any()))
                     .thenReturn(newStep);
 
             engine.processInboundEvent(event);
 
+            // The group decides which occurrence the event goes to before any row is looked for.
+            verify(stepInstanceService, never()).findActionableStep(any(), any(), any());
             verify(stepInstanceService, never()).createStep(any(), any(), anyInt(), any(), any(), any());
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()), any());
         }

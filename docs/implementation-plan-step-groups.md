@@ -378,6 +378,8 @@ ALTER TABLE intelligence_event_log
 **Matcher.**
 - **`calendar-day`:** a new cycle opens for an event whose clinical day, in the configured zone (point 4), is later than the latest cycle's day; every other event goes to the latest cycle (points 6 and 12). Only an event opens a cycle; a predecessor completing, or the parent opening, opens none (point 26).
 - **`entry-step`:** a new cycle opens when an entry step repeats after it's already completed in the current cycle (point 5).
+- **Where an event goes is decided before its row is looked for.** For a step in a group, under the `protocol_instance` lock, from the top-level group down: each group's latest cycle inside its parent's, or a new cycle by the rules above. The event then completes the step's open row in that occurrence, or adds a further row there (point 25). Phase 1 looked for the open row first, outside the lock; on a new day it would complete the previous day's row instead of opening the new cycle.
+- **A later cycle has no due date.** Cycle 0 of a visit-driven group takes its planned due date, as any group does. A cycle opened because the patient came back has none (design §7.1, "usually none"): its predecessor's completion + offset would already be past. Its entry steps other than the matched one are therefore unjudged (point 29); the matched step is due when its event made it, as in phase 1.
 - **Earlier cycles stay open.** Closing them as incomplete is E3, which comes with closure in phase 4 (F2).
 - **Inner repeats:** numbered within their parent occurrence.
 - **Occurrence lookups:** wherever the matcher adds to a group's occurrence, it takes the latest cycle, inside its parent's latest cycle, not cycle 0 (point 28).
@@ -556,7 +558,7 @@ Starts once the rest of point 15 is answered. It adds completion, closure and gr
 ### 4.1 Concurrency
 
 - **Lock:** every group decision (opening, scheduling the next cycle and, from phase 4, completion and closure) runs under the `protocol_instance` lock, taken only when the protocol has groups.
-- **Lock order in the matcher:** the step row first, when completing a step, then `protocol_instance`. Group rows are written only while holding the protocol lock.
+- **Lock order in the matcher:** for a step in a group, `protocol_instance` first, then the step row, since the row is chosen under the lock (from phase 2); for a step outside any group, the step row first, when completing it, then `protocol_instance`. The two orders can't deadlock: while holding `protocol_instance`, a transaction updates only the row of a step in a group, and no transaction locks such a row before `protocol_instance`. Group rows are written only while holding the protocol lock.
 - **Step-sla:** it never takes the protocol lock. It claims the step or group row it judges with `SKIP LOCKED`, writes the verdict, the deviation and any hand-off row, and leaves every group decision to the matcher. It never waits on a lock the matcher holds, so the two can't deadlock.
 
 ### 4.2 Documentation

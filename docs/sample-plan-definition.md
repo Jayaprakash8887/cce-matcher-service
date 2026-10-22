@@ -650,6 +650,7 @@ Each `definitionCanonical` referenced in the PlanDefinition must have a register
 | ActivityDefinition type | `kind` | `CommunicationRequest`, `Task`, `ServiceRequest` |
 | Canonical reference format | `definitionCanonical` | `<url>|<version>` |
 | Step group | `groupingBehavior` on a `step`-typed action with child actions | `logical-group` makes it a group (see [Step Groups](#step-groups)); `visual-group` and `sentence-group` keep it a plain step |
+| Repeating by visit | `extension` `cycle-boundary` on a step group, `valueCode` `calendar-day` or `entry-step` | A new cycle each day the patient comes, or each time an entry step repeats once done (see [Step Groups](#step-groups)) |
 
 `requiredBehavior` note: **only `must` is mandatory, and an absent value is not.** `must` drives the "must"-only predecessor backfill gating in `StepInstanceService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`), and it is the only value that gets an SLA schedule: a step that is not `must` is never pre-created by progressive instantiation (only materialized on the fly if its own trigger fires), gets no `step_sla_state_transition` rows, and can therefore be neither `OVERDUE` nor `MISSED` — nothing was required of it, so there is nothing for it to breach. The one definition is `RequiredBehavior.isMandatory`.
 
@@ -740,4 +741,44 @@ What this example does, given a mandatory `anc-registration` step elsewhere in t
 - **If a BP event arrives before registration,** the visit opens then, with no planned due date. Weight is then created without a due date or deadline, and is never judged.
 - **A second BP event** after the first is recorded as a further completed row in the same visit.
 
-The Protocol Service rejects at load a group that has a trigger or no step, a `selectionBehavior` other than `all`, or `tolerance-days` on an optional group. It also refuses, until they are built, `timing` or the `cycle-boundary` extension on a group (repeating groups), `tolerance-days` on a group (group deadlines), a `fire-event` child of a group, and any action that follows a group.
+**Repeating by visit.** A group repeats in cycles when it carries the `cycle-boundary` extension. A patient journey with one cycle per visit day, holding a Consultation that can happen twice in one visit (triggers left out):
+
+```json
+{
+  "id": "journey",
+  "title": "Patient journey",
+  "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
+  "requiredBehavior": "must",
+  "groupingBehavior": "logical-group",
+  "extension": [
+    { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary", "valueCode": "calendar-day" }
+  ],
+  "action": [
+    { "id": "check-in", "title": "Check-in", "requiredBehavior": "must", "...": "type, trigger" },
+    {
+      "id": "consultation",
+      "title": "Consultation",
+      "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
+      "requiredBehavior": "must",
+      "groupingBehavior": "logical-group",
+      "extension": [
+        { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary", "valueCode": "entry-step" }
+      ],
+      "relatedAction": [{ "actionId": "check-in", "relationship": "after-end" }],
+      "action": [
+        { "id": "history", "title": "History", "requiredBehavior": "must", "...": "type, trigger" },
+        { "id": "examination", "title": "Examination", "requiredBehavior": "must",
+          "relatedAction": [{ "actionId": "history", "relationship": "after-end" }], "...": "type, trigger" }
+      ]
+    }
+  ]
+}
+```
+
+What this example does:
+- **The first event of a day** opens that day's visit, a new journey cycle; any other event that day joins it. Days are counted in the deployment's time zone (`CCE_CALENDAR_ZONE`). An event dated on an earlier day, arriving late, joins the latest visit.
+- **Check-in completing** opens the visit's Consultation, with history awaited.
+- **A second history in one visit,** once the first is recorded, starts a second Consultation in that visit. A second examination joins the current Consultation as a further row.
+- **Only cycle 0 has a planned due date.** A visit or Consultation opened because the patient came back has none, so its awaited steps are not judged.
+
+The Protocol Service rejects at load a group that has a trigger or no step, a `selectionBehavior` other than `all`, or `tolerance-days` on an optional group or on a group with `cycle-boundary`. It rejects a `cycle-boundary` code other than `calendar-day` or `entry-step`, a `calendar-day` group inside another repeating group, and an `entry-step` group with no entry step. It also refuses, until they are built, `timing` on a group (scheduled repeats), `tolerance-days` on a group (group deadlines), a `fire-event` child of a group, and any action that follows a group.

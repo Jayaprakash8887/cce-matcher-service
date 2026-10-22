@@ -85,6 +85,12 @@ All configuration is externalized via environment variables. Defaults are provid
 | `CCE_PROTOCOL_REFRESH_INTERVAL_MS` | `60000` | No | How often to reconcile the in-memory protocol caches against definitions written by the CCE Protocol Service. Upper bound on how long a newly published protocol takes to start matching its condition-only triggers, and on how long a retired one keeps doing so |
 | `CCE_PUBLISH_CONFIRM_TIMEOUT_MS` | `5000` | No | How long to wait for Kafka to acknowledge an intelligence trigger before recording the event as unpublished |
 
+### Step groups
+
+| Variable | Default | Required | Description |
+|---|---|---|---|
+| `CCE_CALENDAR_ZONE` | `UTC` | Yes, where a protocol has a `calendar-day` step group | The time zone in which a `calendar-day` group counts its days, as an IANA name such as `Africa/Kigali` or `Africa/Nairobi`. An event on a later day in this zone than the group's latest cycle opens a new cycle. Clinical times are stored in UTC, so with the default a check-in at 01:30 in Kigali (23:30 UTC the day before) would count towards the previous day's visit. One per deployment. Changing it moves the day boundary for cycles opened from then on; cycles already opened keep the day they opened on |
+
 ### Observability
 
 No environment variables. Metrics are exposed at `/actuator/prometheus` and require no configuration;

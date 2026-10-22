@@ -21,7 +21,6 @@ import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.enums.*;
-import org.openphc.cce.common.repository.StepGroupInstanceRepository;
 import org.openphc.cce.common.repository.StepInstanceRepository;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
@@ -70,9 +69,6 @@ class StepInstanceServiceTest {
     @Mock
     private StepGroupService stepGroupService;
 
-    @Mock
-    private StepGroupInstanceRepository stepGroupInstanceRepository;
-
     private StepInstanceService service;
     private ObjectMapper objectMapper;
 
@@ -83,7 +79,7 @@ class StepInstanceServiceTest {
         service = new StepInstanceService(stepInstanceRepository,
                 parsedProtocolCache, deviationRecorder,
                 intelligenceActionEvaluator, stateTransitionHistoryWriter, slaScheduleService,
-                slaThresholdReader, stepGroupService, stepGroupInstanceRepository);
+                slaThresholdReader, stepGroupService);
 
         // Default: no SLA thresholds. Tests that care stub them per step via buildStep/stubThresholds.
         lenient().when(slaThresholdReader.getThresholds(any()))

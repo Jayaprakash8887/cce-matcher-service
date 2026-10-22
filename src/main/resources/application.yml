@@ -94,6 +94,12 @@ cce:
   intelligence:
     # How long to wait for Kafka to acknowledge an intelligence trigger before recording it unpublished
     publish-confirm-timeout-ms: ${CCE_PUBLISH_CONFIRM_TIMEOUT_MS:5000}
+  step-groups:
+    # The time zone in which a calendar-day step group counts its days, such as Africa/Kigali: an
+    # event on a later day in this zone than the group's latest cycle opens a new cycle. Clinical times
+    # are stored in UTC, so a check-in at 23:30 UTC is already the next day in Kigali. One per
+    # deployment; changing it moves the day boundary for cycles opened from then on.
+    calendar-zone: ${CCE_CALENDAR_ZONE:UTC}
 
 # --- Actuator ---
 management:

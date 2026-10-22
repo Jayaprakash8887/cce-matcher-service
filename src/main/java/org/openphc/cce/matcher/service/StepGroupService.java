@@ -7,10 +7,14 @@ import org.openphc.cce.common.repository.ProtocolInstanceRepository;
 import org.openphc.cce.common.repository.StepGroupInstanceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.util.Comparator;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -28,11 +32,19 @@ public class StepGroupService {
 
     private final StepGroupInstanceRepository groupInstanceRepository;
     private final ProtocolInstanceRepository protocolInstanceRepository;
+    private final ZoneId calendarZone;
 
+    /**
+     * @param calendarZone the deployment's time zone, in which a {@code calendar-day} group's days are
+     *                     counted. One per deployment: clinical times are stored in UTC, and a check-in at
+     *                     23:30 UTC is already the next day in Kigali.
+     */
     public StepGroupService(StepGroupInstanceRepository groupInstanceRepository,
-                            ProtocolInstanceRepository protocolInstanceRepository) {
+                            ProtocolInstanceRepository protocolInstanceRepository,
+                            @Value("${cce.step-groups.calendar-zone:UTC}") ZoneId calendarZone) {
         this.groupInstanceRepository = groupInstanceRepository;
         this.protocolInstanceRepository = protocolInstanceRepository;
+        this.calendarZone = calendarZone;
     }
 
     /**
@@ -48,14 +60,28 @@ public class StepGroupService {
         }
     }
 
-    /** A group's occurrence for one cycle within one occurrence of its parent, if it has been opened. */
-    public Optional<StepGroupInstance> find(ProtocolInstance protocolInstance, String groupActionId,
-                                            StepGroupInstance parent, int cycleIndex) {
-        return parent == null
-                ? groupInstanceRepository.findByProtocolInstanceIdAndGroupActionIdAndParentGroupInstanceIsNullAndCycleIndex(
-                        protocolInstance.getId(), groupActionId, cycleIndex)
-                : groupInstanceRepository.findByProtocolInstanceIdAndGroupActionIdAndParentGroupInstanceIdAndCycleIndex(
-                        protocolInstance.getId(), groupActionId, parent.getId(), cycleIndex);
+    /**
+     * A group's latest cycle within one occurrence of its parent, or within the enrollment for a
+     * top-level group: the one with the highest {@code cycle_index}. Empty when none has been opened.
+     */
+    public Optional<StepGroupInstance> latestCycle(ProtocolInstance protocolInstance, String groupActionId,
+                                                   StepGroupInstance parent) {
+        return groupInstanceRepository.findByProtocolInstanceIdAndGroupActionId(protocolInstance.getId(), groupActionId)
+                .stream()
+                .filter(o -> parent == null
+                        ? o.getParentGroupInstance() == null
+                        : o.getParentGroupInstance() != null
+                                && Objects.equals(o.getParentGroupInstance().getId(), parent.getId()))
+                .max(Comparator.comparingInt(StepGroupInstance::getCycleIndex));
+    }
+
+    /**
+     * Whether {@code at} falls on a later calendar day, in the deployment's time zone, than the day
+     * {@code cycle} opened. A cycle's day is not stored: the first event of its day opened it.
+     */
+    public boolean isLaterDay(StepGroupInstance cycle, OffsetDateTime at) {
+        return at.atZoneSameInstant(calendarZone).toLocalDate()
+                .isAfter(cycle.getOpenedAt().atZoneSameInstant(calendarZone).toLocalDate());
     }
 
     /** Insert an occurrence; the caller holds the enrollment's lock and has found none, and the unique key is the backstop. */

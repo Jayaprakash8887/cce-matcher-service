@@ -33,9 +33,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * The first events for two steps of one unopened group, processed in concurrent transactions. Each finds
- * no open row and opens the group, so without the enrollment lock the group could open twice, or a step
- * could get a second row.
+ * The first events for two steps of one unopened group, processed in concurrent transactions. Each would
+ * find no occurrence and open the group, so without the enrollment lock the group could open twice, or a
+ * step could get a second row.
  */
 class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
 
@@ -94,21 +94,20 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
     }
 
     /**
-     * Records each event as {@code MatcherEngine} does, each in its own transaction: look for an open row,
-     * create the step when there is none, complete it. Both look before either creates anything.
+     * Records each event as {@code MatcherEngine} does for a step in a group, each in its own transaction:
+     * find or create the step's row in the occurrence the event goes to, then complete it. Both start
+     * together, so each looks for the occurrence while the other may be opening it.
      */
     private void recordAtOnce(UUID enrollmentId, List<String> actionIds, OffsetDateTime at) throws Exception {
-        CyclicBarrier bothLooked = new CyclicBarrier(actionIds.size());
+        CyclicBarrier bothStarted = new CyclicBarrier(actionIds.size());
         ExecutorService pool = Executors.newFixedThreadPool(actionIds.size());
         try {
             List<Future<?>> events = actionIds.stream()
                     .<Future<?>>map(actionId -> pool.submit(() -> tx.executeWithoutResult(status -> {
                         ProtocolInstance enrollment = protocolInstanceRepository.findById(enrollmentId).orElseThrow();
-                        StepInstance row = stepInstanceService.findActionableStep(enrollmentId, actionId, at);
-                        await(bothLooked);
-                        if (row == null) {
-                            row = stepInstanceService.createInitialGroupedStep(enrollment, metadata(actionId), at, at);
-                        }
+                        await(bothStarted);
+                        StepInstance row = stepInstanceService.findOrCreateGroupedStep(
+                                enrollment, metadata(actionId), at, at);
                         stepInstanceService.completeStep(row, UUID.randomUUID(), "test", at);
                     })))
                     .toList();
