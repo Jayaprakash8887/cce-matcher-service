@@ -128,8 +128,6 @@ class StepGroupLifecycleTest {
                         .toList());
         when(stepInstanceRepository.existsByProtocolInstanceIdAndActionId(any(), any()))
                 .thenAnswer(i -> stepRows.stream().anyMatch(r -> r.getActionId().equals(i.getArgument(1))));
-        when(stepInstanceRepository.findByStepGroupInstanceId(any()))
-                .thenAnswer(i -> stepRows.stream().filter(r -> inOccurrence(r, i.getArgument(0))).toList());
         when(stepInstanceRepository.existsByStepGroupInstanceIdAndActionId(any(), any()))
                 .thenAnswer(i -> stepRows.stream()
                         .anyMatch(r -> inOccurrence(r, i.getArgument(0)) && r.getActionId().equals(i.getArgument(1))));
@@ -148,26 +146,6 @@ class StepGroupLifecycleTest {
             }
             return row;
         });
-        when(groupInstanceRepository.findByProtocolInstanceIdAndGroupActionIdAndParentGroupInstanceIsNullAndCycleIndex(
-                any(), any(), anyInt()))
-                .thenAnswer(i -> groupRows.stream()
-                        .filter(g -> g.getGroupActionId().equals(i.getArgument(1))
-                                && g.getParentGroupInstance() == null
-                                && g.getCycleIndex() == (int) i.getArgument(2))
-                        .findFirst());
-        when(groupInstanceRepository.findByProtocolInstanceIdAndGroupActionIdAndParentGroupInstanceIdAndCycleIndex(
-                any(), any(), any(), anyInt()))
-                .thenAnswer(i -> groupRows.stream()
-                        .filter(g -> g.getGroupActionId().equals(i.getArgument(1))
-                                && g.getParentGroupInstance() != null
-                                && g.getParentGroupInstance().getId().equals(i.getArgument(2))
-                                && g.getCycleIndex() == (int) i.getArgument(3))
-                        .findFirst());
-        when(groupInstanceRepository.findByParentGroupInstanceId(any()))
-                .thenAnswer(i -> groupRows.stream()
-                        .filter(g -> g.getParentGroupInstance() != null
-                                && g.getParentGroupInstance().getId().equals(i.getArgument(0)))
-                        .toList());
         when(groupInstanceRepository.findByProtocolInstanceIdAndGroupActionId(any(), any()))
                 .thenAnswer(i -> groupRows.stream()
                         .filter(g -> g.getGroupActionId().equals(i.getArgument(1)))

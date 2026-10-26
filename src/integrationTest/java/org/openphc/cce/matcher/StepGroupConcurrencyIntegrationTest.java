@@ -79,8 +79,9 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
         List<StepGroupInstance> visits =
                 stepGroupInstanceRepository.findByProtocolInstanceIdAndGroupActionId(enrollmentId, "visit");
         assertThat(visits).hasSize(1);
-        List<StepInstance> rows = stepInstanceRepository.findByStepGroupInstanceId(visits.get(0).getId());
+        List<StepInstance> rows = stepInstanceRepository.findByProtocolInstanceId(enrollmentId);
         assertThat(rows).extracting(StepInstance::getActionId).containsExactlyInAnyOrder("bp", "weight");
+        assertThat(rows).allMatch(row -> visits.get(0).getId().equals(row.getStepGroupInstance().getId()));
         assertThat(rows).allMatch(row -> row.getStepStatus() == StepStatus.COMPLETED);
     }
 
