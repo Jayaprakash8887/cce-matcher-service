@@ -68,10 +68,10 @@ public class StepGroupService {
                                                    StepGroupInstance parent) {
         return groupInstanceRepository.findByProtocolInstanceIdAndGroupActionId(protocolInstance.getId(), groupActionId)
                 .stream()
-                .filter(o -> parent == null
-                        ? o.getParentGroupInstance() == null
-                        : o.getParentGroupInstance() != null
-                                && Objects.equals(o.getParentGroupInstance().getId(), parent.getId()))
+                .filter(occurrence -> parent == null
+                        ? occurrence.getParentGroupInstance() == null
+                        : occurrence.getParentGroupInstance() != null
+                                && Objects.equals(occurrence.getParentGroupInstance().getId(), parent.getId()))
                 .max(Comparator.comparingInt(StepGroupInstance::getCycleIndex));
     }
 

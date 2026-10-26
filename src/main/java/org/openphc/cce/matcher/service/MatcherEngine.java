@@ -206,7 +206,7 @@ public class MatcherEngine {
             }
 
             boolean hasCondition = stepMetadata.triggers().stream()
-                    .anyMatch(t -> t.condition() != null);
+                    .anyMatch(trigger -> trigger.condition() != null);
 
             if (!hasCondition || evaluateTriggerConditions(stepMetadata, eventData)) {
                 finalMatches.add(match);
@@ -333,8 +333,11 @@ public class MatcherEngine {
             return stepInstanceService.findOrCreateGroupedStep(protocolInstance, stepMetadata, now, occurredAt);
         }
 
-        StepInstance open = stepInstanceService.findActionableStep(protocolInstance.getId(), actionId, occurredAt);
-        return open != null ? open : createInitialStep(protocolInstance, actionId, stepMetadata, now);
+        StepInstance actionableStep =
+                stepInstanceService.findActionableStep(protocolInstance.getId(), actionId, occurredAt);
+        return actionableStep != null
+                ? actionableStep
+                : createInitialStep(protocolInstance, actionId, stepMetadata, now);
     }
 
     /** A step outside any group that the event itself brings into being: due at {@code now}. */
