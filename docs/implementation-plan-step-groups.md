@@ -248,6 +248,14 @@ Points 12 and 25 say which cycle an event goes to, but the matcher adds other ro
 A step created when its group opens takes the group's due date (point 8). A group opened with no planned due date, such as a top-level group with no predecessor (E2) or ANC visit 2 reached before visit 1, gives its other entry steps none, and so no deadline rows: they never go `OVERDUE` or `MISSED`. Before groups, every step had a due date (design §2). Giving them `opened_at` instead would make a visit's second step `OVERDUE` minutes after its first, the problem design §7.1 describes for groups.
 *Decided:* such steps stay unjudged, and show as pending, until E5 fills in a due date (phase 4), if it ever does. Every reader of `step_instance.due_date` must allow null (after phase 2).
 
+**30. A predecessor in a repeating group, seen from outside it.** *(B1 + B2 + F1; blocks phase 2)*
+Point 18 reads a predecessor inside the occurrence it shares with the completed step, and any other predecessor across the enrollment. Once a group repeats, "across the enrollment" sees every cycle. Say a top-level treatment follows the journey's prescription. On 3 Mar the prescription isn't recorded, and its row is still `NOT_STARTED`. On 17 Mar the prescription and then the treatment are recorded in order, but the 3 Mar row is still outstanding, so the treatment raises an `ORDER_VIOLATION`. The other way round, a prescription missing from the 17 Mar visit isn't backfilled, because the 3 Mar visit has one.
+*Decided:* a predecessor in a group that shares no occurrence with the completed step is read in its group's latest cycle, inside its parent's latest cycle, where point 28 adds work. A predecessor outside every group is still read across the enrollment, since it happens once per enrollment. This applies wherever point 18 does (order violations, backfill, the fan-in wait), and to a group's planned due date.
+
+**31. What a group waits on, when one of its steps comes first.** *(E2 + A4; blocks phase 2)*
+Backfill creates the mandatory predecessors of the work observed so far, but it follows only the `relatedAction` edges between steps. A predecessor declared on a group is missed. Say ANC visit 2 follows registration, and a BP for visit 2 arrives before registration has been recorded. The BP step names no predecessor of its own, so registration is never backfilled, never goes `OVERDUE`, and the gap stays invisible. Declared on the BP step instead, registration would have been backfilled.
+*Decided:* a step also waits on what its enclosing groups wait on, at every level. Backfill follows those edges, so registration is backfilled when no row for it exists (into its own group's occurrence if it has one, by points 28 and 30). Order violations still look only at a step's own immediate predecessors.
+
 ---
 
 ## 3. Phases
@@ -383,6 +391,8 @@ ALTER TABLE intelligence_event_log
 - **Earlier cycles stay open.** Closing them as incomplete is E3, which comes with closure in phase 4 (F2).
 - **Inner repeats:** numbered within their parent occurrence.
 - **Occurrence lookups:** wherever the matcher adds to a group's occurrence, it takes the latest cycle, inside its parent's latest cycle, not cycle 0 (point 28).
+- **Predecessors in a repeating group:** read in the group's latest cycle when they share no occurrence with the completed step (point 30).
+- **Backfill follows group edges:** a mandatory predecessor declared on a group, or on an enclosing group, is backfilled when one of the group's steps is recorded first (point 31). The walk is `PlanDefinitionParser.computeMustPredecessorSteps` with the groups, in `cce-common-util`.
 
 **Configuration:** a calendar-zone setting in the matcher, one per deployment (point 4), documented in its deployment guide.
 
@@ -395,6 +405,8 @@ ALTER TABLE intelligence_event_log
 - A `calendar-day` journey following registration opens no cycle until the first visit (point 26).
 - A repeated history opens a second Consultation; a repeated examination joins the current one (point 25).
 - Point 18's example: an examination left undone in an earlier visit raises no order violation in a later one.
+- Point 30's example: a prescription left undone in an earlier visit raises no order violation for a top-level treatment in a later one, and a prescription missing from the later visit is backfilled into it.
+- Point 31's example: a BP for visit 2 recorded before registration backfills registration, and so does a diet assessment in visit 2's nested nutrition group.
 - A Consultation opened when check-in completes, and a backfilled step, join the latest visit (point 28).
 
 ### After phase 2: reporting for production

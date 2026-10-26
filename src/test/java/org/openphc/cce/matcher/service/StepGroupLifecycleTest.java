@@ -367,6 +367,35 @@ class StepGroupLifecycleTest {
         }
 
         @Test
+        void aStepRecordedBeforeWhatItsGroupFollows_backfillsIt() {
+            record("bp", T0);
+
+            List<StepInstance> registrations = rowsFor("registration");
+            assertEquals(1, registrations.size(), "visit 2 follows registration, so BP does too");
+            assertEquals(StepStatus.NOT_STARTED, registrations.get(0).getStepStatus());
+            assertEquals(T0, registrations.get(0).getDueDate(), "due when the BP showed it was missing");
+            assertNull(occurrenceIdOf(registrations.get(0)), "registration is outside every group");
+        }
+
+        @Test
+        void soDoesAStepInANestedGroup() {
+            record("diet", T0);
+
+            assertEquals(1, rowsFor("registration").size());
+        }
+
+        @Test
+        void theRegistrationEventLater_completesTheBackfilledRow() {
+            record("bp", T0);
+            StepInstance backfilled = rowsFor("registration").get(0);
+
+            StepInstance completed = record("registration", T0.plusDays(1));
+
+            assertSame(backfilled, completed);
+            assertEquals(1, groupRows.stream().filter(g -> g.getGroupActionId().equals("visit-2")).count());
+        }
+
+        @Test
         void anOptionalGroupOpensWhenOneOfItsStepsIsMatched_insideItsParent() {
             record("registration", T0);
             record("diet", T0.plusDays(39));
@@ -641,6 +670,60 @@ class StepGroupLifecycleTest {
             assertEquals(1, examinations.size());
             assertEquals(laterConsultation.getId(), occurrenceIdOf(examinations.get(0)));
             assertTrue(cyclesOf("consultation", visit(0)).stream().allMatch(c -> c.getCycleIndex() == 0));
+        }
+    }
+
+    @Nested
+    class TreatmentAfterAVisit {
+
+        private static final OffsetDateTime DAY_1 = T0;
+        private static final OffsetDateTime DAY_15 = T0.plusDays(14);
+
+        /**
+         * A journey repeating by calendar day: check-in, then examination, then prescription. A treatment
+         * outside the journey follows the prescription, so it shares no group with it.
+         */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey", "must"), "calendar-day");
+            step(journey.addAction(), "check-in", "must");
+            after(step(journey.addAction(), "examination", "must"), "check-in", 0);
+            after(step(journey.addAction(), "prescription", "must"), "examination", 0);
+            after(step(pd.addAction(), "treatment", "must"), "prescription", 0);
+            use(pd);
+        }
+
+        private StepGroupInstance visit(int cycleIndex) {
+            return cyclesOf("journey", null).get(cycleIndex);
+        }
+
+        @Test
+        void aPrescriptionLeftUndoneInAnEarlierVisit_raisesNoOrderViolationForTheTreatment() {
+            record("check-in", DAY_1);
+            record("examination", DAY_1.plusMinutes(20));
+            assertEquals(StepStatus.NOT_STARTED, rowsFor("prescription").get(0).getStepStatus());
+
+            record("check-in", DAY_15);
+            record("examination", DAY_15.plusMinutes(10));
+            record("prescription", DAY_15.plusMinutes(20));
+            record("treatment", DAY_15.plusMinutes(30));
+
+            verify(deviationRecorder, never()).recordDeviation(any(), any(), any());
+        }
+
+        @Test
+        void aPrescriptionMissingFromTheLatestVisit_isBackfilledIntoIt_thoughAnEarlierVisitHasOne() {
+            record("check-in", DAY_1);
+            record("examination", DAY_1.plusMinutes(10));
+
+            record("check-in", DAY_15);
+            record("treatment", DAY_15.plusMinutes(30));
+
+            List<StepInstance> prescriptions = rowsFor("prescription");
+            assertEquals(2, prescriptions.size());
+            assertEquals(visit(1).getId(), occurrenceIdOf(prescriptions.get(1)));
+            assertEquals(StepStatus.NOT_STARTED, prescriptions.get(1).getStepStatus());
         }
     }
 

@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -273,9 +274,8 @@ public class StepInstanceService {
         // Check if any must-predecessor steps are still in actionable (incomplete) states
         List<String> incompletePrerequisites = new ArrayList<>();
         for (String predecessorId : mustPredecessorIds) {
-            boolean hasIncomplete = siblings.stream()
-                    .filter(s -> predecessorId.equals(s.getActionId()))
-                    .filter(s -> isRowInScope(completedStep.getStepGroupInstance(), s, protocol))
+            boolean hasIncomplete = rowsInScope(predecessorId, completedStep.getStepGroupInstance(),
+                    completedStep.getProtocolInstance(), protocol, siblings).stream()
                     .anyMatch(this::isOutstandingStep);
             if (hasIncomplete) {
                 incompletePrerequisites.add(predecessorId);
@@ -365,8 +365,7 @@ public class StepInstanceService {
             // than whichever happened to complete first — each of their completions re-runs this
             // method, so the wait resolves itself.
             String blockingPrerequisite = firstInFlightPrerequisite(
-                    graph.predecessorsOf(targetStep.id()), completedStep.getActionId(),
-                    completedStep.getStepGroupInstance(), protocol, siblings);
+                    graph.predecessorsOf(targetStep.id()), completedStep, protocol, siblings);
             if (blockingPrerequisite != null) {
                 log.debug("Deferring progressive instantiation of {} — prerequisite {} is still in flight (instanceId={})",
                         targetStep.id(), blockingPrerequisite, protocolInstance.getId());
@@ -461,17 +460,15 @@ public class StepInstanceService {
      * settled, which will never complete later than now.
      */
     private String firstInFlightPrerequisite(List<String> prerequisiteIds,
-                                             String completedActionId,
-                                             StepGroupInstance fromGroupInstance,
+                                             StepInstance completedStep,
                                              ParsedProtocolCache.ParsedProtocol protocol,
                                              List<StepInstance> siblings) {
         for (String prerequisiteId : prerequisiteIds) {
-            if (prerequisiteId.equals(completedActionId)) {
+            if (prerequisiteId.equals(completedStep.getActionId())) {
                 continue;
             }
-            boolean inFlight = siblings.stream()
-                    .filter(s -> prerequisiteId.equals(s.getActionId()))
-                    .filter(s -> isRowInScope(fromGroupInstance, s, protocol))
+            boolean inFlight = rowsInScope(prerequisiteId, completedStep.getStepGroupInstance(),
+                    completedStep.getProtocolInstance(), protocol, siblings).stream()
                     .anyMatch(this::isOutstandingStep);
             if (inFlight) {
                 return prerequisiteId;
@@ -506,6 +503,9 @@ public class StepInstanceService {
      * <p>Idempotent: a mandatory step that already has any step instance — in any state, whether
      * pre-existing or created earlier in this same transaction by progressive instantiation — is
      * left alone. A backfilled step inside a group joins the occurrence {@link #occurrenceForWork} gives it.
+     *
+     * <p>A step also waits on what its enclosing groups wait on: a BP recorded in ANC visit 2, which follows
+     * registration, backfills registration when it has no row, though the BP step names no predecessor.
      */
     private void backfillMissingMandatorySteps(StepInstance completedStep,
                                                ParsedProtocolCache.ParsedProtocol protocol,
@@ -514,12 +514,14 @@ public class StepInstanceService {
         List<PlanDefinitionParser.StepMetadata> steps = protocol.steps();
 
         Set<String> observedStepIds = siblings.stream()
-                .filter(s -> isRowInScope(completedStep.getStepGroupInstance(), s, protocol))
                 .map(StepInstance::getActionId)
+                .distinct()
+                .filter(actionId -> !rowsInScope(actionId, completedStep.getStepGroupInstance(), protocolInstance,
+                        protocol, siblings).isEmpty())
                 .collect(Collectors.toSet());
 
         List<String> missingMustSteps = PlanDefinitionParser
-                .computeMustPredecessorSteps(observedStepIds, steps, protocol.dependencyGraph()).stream()
+                .computeMustPredecessorSteps(observedStepIds, steps, protocol.groups(), protocol.dependencyGraph()).stream()
                 .filter(stepId -> !observedStepIds.contains(stepId))
                 .sorted()
                 .toList();
@@ -816,7 +818,8 @@ public class StepInstanceService {
             if (edge == null) {
                 continue;
             }
-            PrerequisiteProgress progress = prerequisiteProgress(prerequisiteId, parent, protocol, siblings);
+            PrerequisiteProgress progress = prerequisiteProgress(prerequisiteId, parent, protocolInstance, protocol,
+                    siblings);
             if (progress.inFlight()) {
                 return null;
             }
@@ -845,12 +848,10 @@ public class StepInstanceService {
     }
 
     private PrerequisiteProgress prerequisiteProgress(String prerequisiteId, StepGroupInstance fromGroupInstance,
+                                                      ProtocolInstance protocolInstance,
                                                       ParsedProtocolCache.ParsedProtocol protocol,
                                                       List<StepInstance> siblings) {
-        List<StepInstance> rows = siblings.stream()
-                .filter(s -> prerequisiteId.equals(s.getActionId()))
-                .filter(s -> isRowInScope(fromGroupInstance, s, protocol))
-                .toList();
+        List<StepInstance> rows = rowsInScope(prerequisiteId, fromGroupInstance, protocolInstance, protocol, siblings);
         Optional<StepInstance> completed = rows.stream()
                 .filter(s -> s.getStepStatus() == StepStatus.COMPLETED && s.getCompletedAt() != null)
                 .max(Comparator.comparing(StepInstance::getCompletedAt));
@@ -863,11 +864,58 @@ public class StepInstanceService {
                 : PrerequisiteProgress.NOT_RECORDED;
     }
 
-    /** Whether {@code row} counts for work in {@code fromGroupInstance}: inside the shared occurrence, if any. */
-    private static boolean isRowInScope(StepGroupInstance fromGroupInstance, StepInstance row,
-                                   ParsedProtocolCache.ParsedProtocol protocol) {
-        StepGroupInstance scope = innermostSharedOccurrence(fromGroupInstance, row.getActionId(), protocol);
-        return scope == null || isInsideOccurrence(row.getStepGroupInstance(), scope);
+    /**
+     * {@code actionId}'s rows that count for work in {@code fromGroupInstance}, such as a predecessor's rows
+     * when a step completes there:
+     * <ul>
+     *   <li>a step that shares a group with that work: its rows in the shared occurrence, so one cycle never
+     *       sees another's;</li>
+     *   <li>a step in a group that shares none: its rows in its group's latest cycle, inside its parent's
+     *       latest, where new work goes. A top-level treatment after a visit's prescription sees this visit's
+     *       prescription, not an earlier visit's;</li>
+     *   <li>a step outside every group: all its rows in the enrollment, since it happens once per
+     *       enrollment.</li>
+     * </ul>
+     */
+    private List<StepInstance> rowsInScope(String actionId, StepGroupInstance fromGroupInstance,
+                                           ProtocolInstance protocolInstance,
+                                           ParsedProtocolCache.ParsedProtocol protocol,
+                                           List<StepInstance> siblings) {
+        StepGroupInstance scope = innermostSharedOccurrence(fromGroupInstance, actionId, protocol);
+        if (scope == null) {
+            PlanDefinitionParser.StepMetadata step = protocol.step(actionId);
+            scope = step == null || step.groupId() == null
+                    ? null
+                    : latestOccurrencePath(protocolInstance, step.groupId(), protocol);
+        }
+        StepGroupInstance within = scope;
+        return siblings.stream()
+                .filter(s -> actionId.equals(s.getActionId()))
+                .filter(s -> within == null || isInsideOccurrence(s.getStepGroupInstance(), within))
+                .toList();
+    }
+
+    /**
+     * The deepest occurrence on the way down to {@code groupId}'s latest cycle, taking the latest cycle at
+     * each level from the top-level group: the group's own latest cycle, or the occurrence where it would
+     * open when it hasn't yet, which holds none of its rows. Null when not even the top-level group is open,
+     * in which case none of its steps has a row.
+     */
+    private StepGroupInstance latestOccurrencePath(ProtocolInstance protocolInstance, String groupId,
+                                                   ParsedProtocolCache.ParsedProtocol protocol) {
+        LinkedList<String> path = new LinkedList<>();
+        for (String id = groupId; id != null; id = protocol.group(id).parentGroupId()) {
+            path.addFirst(id);
+        }
+        StepGroupInstance deepest = null;
+        for (String id : path) {
+            Optional<StepGroupInstance> latest = stepGroupService.latestCycle(protocolInstance, id, deepest);
+            if (latest.isEmpty()) {
+                break;
+            }
+            deepest = latest.get();
+        }
+        return deepest;
     }
 
     /** {@code fromGroupInstance}'s occurrence of the innermost group that also encloses {@code actionId}, or null. */
