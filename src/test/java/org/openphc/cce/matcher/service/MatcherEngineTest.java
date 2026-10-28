@@ -341,7 +341,7 @@ class MatcherEngineTest {
         }
 
         @Test
-        void explicitMatch_aStepInAGroup_isCreatedInItsGroupsOccurrence() {
+        void explicitMatch_aStepInAGroup_isCreatedInItsGroupInstance() {
             UUID protocolInstanceId = UUID.randomUUID();
             ProtocolDefinition protocolDef = buildProtocolDefinition(UUID.randomUUID());
             ProtocolInstance protocolInstance = buildProtocolInstance(protocolDef);
@@ -364,7 +364,7 @@ class MatcherEngineTest {
 
             engine.processInboundEvent(event);
 
-            // The group decides which occurrence the event goes to before any row is looked for.
+            // The group decides which instance the event goes to before any row is looked for.
             verify(stepInstanceService, never()).findActionableStep(any(), any(), any());
             verify(stepInstanceService, never()).createStep(any(), any(), anyInt(), any(), any(), any());
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()), any());

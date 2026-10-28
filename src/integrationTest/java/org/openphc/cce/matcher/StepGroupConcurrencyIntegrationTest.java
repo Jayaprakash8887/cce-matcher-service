@@ -34,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The first events for two steps of one unopened group, processed in concurrent transactions. Each would
- * find no occurrence and open the group, so without the enrollment lock the group could open twice, or a
+ * find no instance and open the group, so without the enrollment lock the group could open twice, or a
  * step could get a second row.
  */
 class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
@@ -70,7 +70,7 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
     }
 
     @RepeatedTest(10)
-    void twoFirstEventsAtOnce_openOneOccurrence_withOneRowPerStep() throws Exception {
+    void twoFirstEventsAtOnce_openOneGroupInstance_withOneRowPerStep() throws Exception {
         OffsetDateTime at = OffsetDateTime.now(ZoneOffset.UTC).minusHours(1).truncatedTo(ChronoUnit.MICROS);
         UUID enrollmentId = enroll(at);
 
@@ -96,8 +96,8 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
 
     /**
      * Records each event as {@code MatcherEngine} does for a step in a group, each in its own transaction:
-     * find or create the step's row in the occurrence the event goes to, then complete it. Both start
-     * together, so each looks for the occurrence while the other may be opening it.
+     * find or create the step's row in the instance the event goes to, then complete it. Both start
+     * together, so each looks for the instance while the other may be opening it.
      */
     private void recordAtOnce(UUID enrollmentId, List<String> actionIds, OffsetDateTime at) throws Exception {
         CyclicBarrier bothStarted = new CyclicBarrier(actionIds.size());

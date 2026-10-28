@@ -13,8 +13,8 @@ This revision replaces the earlier model, in which a group was a parent *step* d
 ## 1. Summary
 
 - **A group is its own concept.** In the PlanDefinition it is an `action` with `groupingBehavior: logical-group`, child actions, and no trigger. It is never matched to an event; only its steps are.
-- **It has its own table.** Each occurrence of a group for a patient is one `step_group_instance` row. Each step points to its direct group occurrence; each nested group points to its parent occurrence.
-- **Repeating is optional.** A group may occur once (an ANC visit), repeat on a schedule (a quarterly review), or repeat per visit (the Rwanda patient journey). Each repeat is a new occurrence, called a **cycle**.
+- **It has its own table.** Each instance of a group for a patient is one `step_group_instance` row. Each step points to its direct group instance; each nested group points to its parent instance.
+- **Repeating is optional.** A group may occur once (an ANC visit), repeat on a schedule (a quarterly review), or repeat per visit (the Rwanda patient journey). Each repeat is a new instance, called a **cycle**.
 - **Complete and closed are different.** A group is *complete* when all its mandatory work is done. It is *closed* when nothing more is expected of it. A group can be closed but incomplete.
 - **A deadline sits at one level per branch.** It is either on the group or on its steps, never both, so one missed fact gives one verdict.
 
@@ -142,17 +142,17 @@ Keeping groups typed `step` means `validateActionTypes`, and the parser walks th
 
 ### 4.3 Kinds of group
 
-| Kind | Example | A new occurrence starts | Group due date |
+| Kind | Example | A new instance starts | Group due date |
 |---|---|---|---|
-| Single occurrence | ANC visit 2 | — | From `relatedAction`, or from pregnancy dating (A4) |
+| Single instance | ANC visit 2 | — | From `relatedAction`, or from pregnancy dating (A4) |
 | Scheduled repeat | Quarterly diabetes review | Every `period` of `Timing.repeat`, until `count` or a bound (`boundsDuration` or `boundsPeriod.end`) is reached | Yes |
 | Visit-driven repeat | Rwanda patient journey | Each time the patient comes back (B2, B3) | Usually none |
 
 ### 4.4 Nesting
 
 Groups form a tree:
-- each step points to its direct group occurrence;
-- each nested group occurrence points to its parent occurrence;
+- each step points to its direct group instance;
+- each nested group instance points to its parent instance;
 - a step belongs to one group at most, because PlanDefinition nesting is itself a tree.
 
 Whether an inner group may repeat within one cycle of its outer group is B1. The earlier rule rejecting nested repeating groups is replaced by whatever B1 decides.
@@ -239,7 +239,7 @@ CREATE INDEX idx_step_instance_group ON step_instance (step_group_instance_id)
     WHERE step_group_instance_id IS NOT NULL;
 ```
 
-- **`NULLS NOT DISTINCT` is required.** Without it, PostgreSQL treats nulls in a unique key as different from each other. Two rows for the same top-level group and cycle (both with a null parent) would then both be accepted, and opening a top-level occurrence would not be idempotent. The clause needs PostgreSQL 15 or later; CCE runs 16.
+- **`NULLS NOT DISTINCT` is required.** Without it, PostgreSQL treats nulls in a unique key as different from each other. Two rows for the same top-level group and cycle (both with a null parent) would then both be accepted, and opening a top-level instance would not be idempotent. The clause needs PostgreSQL 15 or later; CCE runs 16.
 - **No status column.** "Complete / partly done / not started" is calculated from the steps (D2): a stored calculated value drifts out of date. Only facts are stored:
   - `opened_at`, `completed_at` and `closed_at`, recorded by the matcher;
   - `sla_status`, recorded by step-sla.
@@ -262,75 +262,75 @@ The alternative is separate group tables for transitions and deviations. Either 
 
 ## 7. Lifecycle (`cce-matcher-service`)
 
-### 7.1 Opening a group occurrence
+### 7.1 Opening a group instance
 
 A group has no trigger, so something else has to open it:
 
 | Situation | Opens when | Due date |
 |---|---|---|
 | Group with a `relatedAction` predecessor | The predecessor finishes. This is progressive instantiation, as for steps; whether "finishes" means complete or closed is E2. | The predecessor's completion + offset. If it closed without completing, see E2. |
-| An event matches a step whose group has no open occurrence | Reactively, with the step | Its planned due date, below. Never the event's time. |
+| An event matches a step whose group has no open instance | Reactively, with the step | Its planned due date, below. Never the event's time. |
 | Top-level group with no predecessor | E2 | None, below |
-| Nested group that is an entry member of its parent | When its parent occurrence opens | The parent's due date |
+| Nested group that is an entry member of its parent | When its parent instance opens | The parent's due date |
 | Next cycle of a scheduled repeat | §7.5 | §7.5 |
 | New cycle of a visit-driven repeat | The entry step's event arrives (B2) | Usually none |
 
-**An occurrence's due date never depends on what opened it.** An occurrence opened reactively takes the due date it would have had if it had been opened as planned:
+**A group instance's due date never depends on what opened it.** A group instance opened reactively takes the due date it would have had if it had been opened as planned:
 
 | Case | Due date |
 |---|---|
 | The group has a `relatedAction` predecessor that has completed | The predecessor's completion + offset, as if progressive instantiation had opened it |
 | Next cycle of a scheduled repeat | The cycle's scheduled due date (§7.5) |
-| Nested group | Its parent occurrence's due date |
-| No planned due date can be worked out yet: the predecessor hasn't completed, a top-level group with no predecessor, or ANC pregnancy dating (A4) | None. The occurrence gets no group deadline rows (§8.1, E5). |
+| Nested group | Its parent instance's due date |
+| No planned due date can be worked out yet: the predecessor hasn't completed, a top-level group with no predecessor, or ANC pregnancy dating (A4) | None. The instance gets no group deadline rows (§8.1, E5). |
 
 Using the event's time would make a group with its own deadline late almost every time. The first step's event sets the due date and the remaining mandatory steps arrive after it, while `MET` needs all of them by the due date. In ANC visit 2, a woman arriving early at 19 weeks would have her visit judged `OVERDUE` five minutes later, when the BP is recorded. A step doesn't have this problem with `createInitialStep`'s "due now", because the step is created and completed by the same event; a group is opened by its first step and completed by its last.
 
-Opening an occurrence does three things, in one transaction:
+Opening a group instance does three things, in one transaction:
 1. inserts the `step_group_instance` row, idempotent through its unique key;
 2. creates a `NOT_STARTED` step for each mandatory **entry** step;
 3. opens each entry nested group, recursively.
 
 Only entry members are created. Later members arrive through progressive instantiation with the due dates their own `relatedAction` offsets define. Creating all members at once would give, for example, a day-3 lab the same due date as the day-0 vitals.
 
-### 7.2 Progression inside an occurrence
+### 7.2 Progression inside a group instance
 
 `createDependentSteps` deduplicates across the whole protocol instance today (`existsByProtocolInstanceIdAndActionId`). When the completed step and its dependent share a group:
-- the dependent joins the same occurrence;
-- deduplication is scoped to that occurrence only. Otherwise cycle 1 could never re-create a step that cycle 0 already has.
+- the dependent joins the same instance;
+- deduplication is scoped to that instance only. Otherwise cycle 1 could never re-create a step that cycle 0 already has.
 
-When the dependent belongs to a group but its predecessor doesn't, the dependent joins its group's open occurrence, opening one if there is none, as `createInitialStep` does (§7.3).
+When the dependent belongs to a group but its predecessor doesn't, the dependent joins its group's open instance, opening one if there is none, as `createInitialStep` does (§7.3).
 
 All other edges keep today's behaviour.
 
-### 7.3 Matching an event to an occurrence
+### 7.3 Matching an event to a group instance
 
 - **`findActionableStep`** returns `steps.get(0)` from an unordered query. Once a step can be open in more than one cycle, which one an event completes is arbitrary. Which row it should complete is B6. Whatever is chosen needs an explicit order, which also fixes the same latent bug for `repeat_index` rows.
-- **`createInitialStep`** attaches the new step to the open occurrence of its direct group. If there is none, it opens one, and its ancestors' occurrences if they are also not open. Proposal: if a repeating group has stopped (count or bounds reached), the step is recorded with no group, so an event past the protocol's bound doesn't start a new cycle.
+- **`createInitialStep`** attaches the new step to the open instance of its direct group. If there is none, it opens one, and its ancestors' instances if they are also not open. Proposal: if a repeating group has stopped (count or bounds reached), the step is recorded with no group, so an event past the protocol's bound doesn't start a new cycle.
 - **Visit-driven groups:** the `Encounter` reference most FHIR clinical resources carry is the strongest candidate key for which journey an event belongs to (B2, B6).
 
 ### 7.4 Complete and closed
 
-**Complete.** An occurrence is complete when every mandatory member is done. The matcher decides it, and when it happens records the clinical time of the completion that made it so as `completed_at` (§6.1). Nothing else about completeness is stored. When a member counts as done:
+**Complete.** A group instance is complete when every mandatory member is done. The matcher decides it, and when it happens records the clinical time of the completion that made it so as `completed_at` (§6.1). Nothing else about completeness is stored. When a member counts as done:
 - **a mandatory step:** its `step_status` is `COMPLETED`, whatever its `sla_status`. A step completed late still counts as done;
-- **a mandatory nested group:** its occurrence is complete.
+- **a mandatory nested group:** its instance is complete.
 
 Members that haven't been created yet count as not done. So the member list comes from the PlanDefinition, not only from the rows that exist.
 
 **Closed** is a stored fact: the matcher sets `closed_at` when nothing more is expected. That is:
-- the occurrence is complete; or
-- the group has a deadline and the occurrence's `sla_status` is `MISSED`; or
+- the instance is complete; or
+- the group has a deadline and the instance's `sla_status` is `MISSED`; or
 - the deadline is below the group, and every mandatory member is settled.
 
   "Settled" combines the two fields:
   - **a step** is settled when its `step_status` is `COMPLETED`, or its `sla_status` is `MISSED` (it is still `NOT_STARTED`, but has been written off). `sla_status` `OVERDUE` is not settled: the step can still be done before it is written off;
-  - **a nested group** is settled when its occurrence is closed;
-  - **a member never created** because a predecessor was written off (`sla_status` `MISSED`, `step_status` still `NOT_STARTED`) is settled too. Without this rule, one written-off step would hold the occurrence open forever, because its dependents are only created when it completes.
-- An occurrence with no deadline at any level can only close by completing, unless E3 decides otherwise.
+  - **a nested group** is settled when its instance is closed;
+  - **a member never created** because a predecessor was written off (`sla_status` `MISSED`, `step_status` still `NOT_STARTED`) is settled too. Without this rule, one written-off step would hold the instance open forever, because its dependents are only created when it completes.
+- A group instance with no deadline at any level can only close by completing, unless E3 decides otherwise.
 
 Rules around closure:
-- **Only the matcher writes `closed_at`.** When a step-sla verdict is what closes an occurrence, the matcher has to learn of it through a hand-off (B5).
-- **Late work after closure (A2).** The occurrence stays closed and its `sla_status` doesn't change, but it can still become complete, and `completed_at` is then set. A late completion must not create new dependents inside a closed occurrence.
+- **Only the matcher writes `closed_at`.** When a step-sla verdict is what closes a group instance, the matcher has to learn of it through a hand-off (B5).
+- **Late work after closure (A2).** The instance stays closed and its `sla_status` doesn't change, but it can still become complete, and `completed_at` is then set. A late completion must not create new dependents inside a closed instance.
 - **Shared with protocol instances (D3).** The complete/closed logic is written once, over a set of members, so it can later decide protocol completion too. One consequence: an open-ended repeating group never closes, so protocol completion needs a rule for it, for example counting it as done once its current cycle is closed.
 
 ### 7.5 The next cycle
@@ -386,23 +386,23 @@ Two things are still open:
 
 The matcher stays the only service that schedules deadlines.
 
-- **Group rows.** When it opens an occurrence of a mandatory group that has `tolerance-days`, it writes the group's `DUE_DATE_REACHED` row (`due_date`) and `MISSED_DATE_REACHED` row (`due_date + tolerance`). If no due date could be worked out at opening (§7.1), it writes neither, and the occurrence is not judged unless E5 decides otherwise.
+- **Group rows.** When it opens an instance of a mandatory group that has `tolerance-days`, it writes the group's `DUE_DATE_REACHED` row (`due_date`) and `MISSED_DATE_REACHED` row (`due_date + tolerance`). If no due date could be worked out at opening (§7.1), it writes neither, and the instance is not judged unless E5 decides otherwise.
 - **No step rows under a group deadline.** Steps under that group get no SLA rows at all. Without this, each mandatory step would also go `OVERDUE` on its own due date (§2), and one late visit would raise a group deviation plus one per step. In code, `createStep` passes no thresholds to `StepSlaScheduleService` for a step whose deadline is held by a group. The step's `due_date` is still recorded, for ordering (B6) and display.
-- **Completion and MET.** When the last mandatory member completes, the matcher sets the occurrence's `completed_at`. If that is at or before the group's due date, it also writes the group's `MET_CONDITION_REACHED` row, as it does for steps.
+- **Completion and MET.** When the last mandatory member completes, the matcher sets the instance's `completed_at`. If that is at or before the group's due date, it also writes the group's `MET_CONDITION_REACHED` row, as it does for steps.
 
 ### 8.2 Judging (step-sla)
 
-- Group rows are applied exactly like step rows, from stored facts only. Step-sla compares the occurrence's `completed_at` with the row's threshold, as it compares a step's `completed_at` today. It writes `step_group_instance.sla_status` (forward-only, through `SlaStatus.canReplace`) and records the deviation against the group (D1).
+- Group rows are applied exactly like step rows, from stored facts only. Step-sla compares the instance's `completed_at` with the row's threshold, as it compares a step's `completed_at` today. It writes `step_group_instance.sla_status` (forward-only, through `SlaStatus.canReplace`) and records the deviation against the group (D1).
 - Step-sla does not read the group's steps to decide. It parses no PlanDefinitions, so it can't tell when a mandatory member hasn't been created yet. For example, a step whose only predecessor is optional and never happened has no row, and the remaining rows could all read as done.
 - `SlaTransitionFetchRepository` joins and locks each row's step. Group rows need the same with the group row.
-- A group `MISSED` verdict closes the occurrence (§7.4), which the matcher learns of through the hand-off (B5).
+- A group `MISSED` verdict closes the instance (§7.4), which the matcher learns of through the hand-off (B5).
 - **Event Replay (C3).** Group verdicts, and any closures they cause, can be wrong during a replay in the same way step verdicts can, and can't be undone.
 
 ---
 
 ## 9. Concurrency
 
-Two mandatory members of one occurrence can settle at the same moment. A group verdict can also land while the last member completes. Each transaction may see the other's change as not yet made, so neither closes the occurrence or opens the next cycle.
+Two mandatory members of one instance can settle at the same moment. A group verdict can also land while the last member completes. Each transaction may see the other's change as not yet made, so neither closes the instance or opens the next cycle.
 
 - **Lock:** before deciding complete or closed, or opening the next cycle, lock the protocol instance with `ProtocolInstanceRepository.findByIdForUpdate` (`PESSIMISTIC_WRITE`, added to `cce-common-util`). Take it only when the protocol has groups; protocols without groups pay nothing. It is a PostgreSQL row lock, so it serializes across services as well as across threads.
 - **Lock order:** always the step row (in step-sla, the step or group row) first, then `protocol_instance`. The matcher writes the step before any group logic runs, and step-sla locks its batch's rows at fetch time, so both services take locks in the same order.
@@ -492,7 +492,7 @@ The visit-driven kind raises a matching question that scheduled groups barely ha
 | | ANC visit 2 (§11.1) | Rwanda patient journey (§11.2) |
 |---|---|---|
 | PlanDefinition | Group action, `logical-group`, `tolerance-days` on the group, due from `relatedAction` or pregnancy dating (A4) | Group action, `logical-group`, repeats per visit (B3), containing a Consultation group |
-| Rows | One `step_group_instance` (cycle 0), due at 20 weeks. Its mandatory steps have no SLA rows. | One occurrence per visit, plus one Consultation occurrence per visit pointing to it as parent |
+| Rows | One `step_group_instance` (cycle 0), due at 20 weeks. Its mandatory steps have no SLA rows. | One instance per visit, plus one Consultation instance per visit pointing to it as parent |
 | Deadline | Group: `OVERDUE` at 20 weeks, `MISSED` at 22 weeks | None on the group; steps may carry deadlines relative to check-in |
 | Complete | All four mandatory steps have `step_status` `COMPLETED` | All mandatory steps, including Consultation's, have `step_status` `COMPLETED` |
 | Closed | Complete, or the group's `sla_status` is `MISSED` | Complete, or E3 |
@@ -590,13 +590,13 @@ This doesn't block groups as such. But without it, an ANC visit often has no pla
 
 **B1. Can an inner group repeat within one cycle of its outer group?**
 
-*Scenario.* In the Rwanda journey, a patient sees a doctor in the morning and goes back to the same clinic in the afternoon, on the same visit. Is that two Consultation occurrences inside one journey cycle, or one?
+*Scenario.* In the Rwanda journey, a patient sees a doctor in the morning and goes back to the same clinic in the afternoon, on the same visit. Is that two Consultation instances inside one journey cycle, or one?
 
 *Options.*
 - (a) At most once per visit. A group nested inside a repeating group may not have its own repeat.
-- (b) Yes. The Consultation repeats within the visit, its cycles numbered within each journey occurrence.
+- (b) Yes. The Consultation repeats within the visit, its cycles numbered within each journey instance.
 
-The schema supports either, because its unique key includes the parent occurrence.
+The schema supports either, because its unique key includes the parent instance.
 
 *See:* §4.4, §5.3.
 
@@ -832,14 +832,14 @@ If now, it needs a rule for open-ended groups. The Rwanda journey has no count o
 These came from checking the discussion's proposals against the 2.0.0 code. Each is settled here, in the section given at its end.
 
 1. **A due date is already a deadline (C2).** A mandatory step goes `OVERDUE` on its due date whether or not it has `tolerance-days`; `tolerance-days` only adds `MISSED`. So the discussion's "the author chooses the level by where they put `tolerance-days`" (§11.1) holds only if the matcher also schedules no step rows under a group deadline (§8.1). Likewise, a step with no tolerance can never be `MISSED`, but it can be `OVERDUE`.
-2. **The discussion's unique key needs `NULLS NOT DISTINCT`**, or top-level occurrences can be duplicated (§6.1).
+2. **The discussion's unique key needs `NULLS NOT DISTINCT`**, or top-level instances can be duplicated (§6.1).
 3. **CDC has no connector column list.** The new table has to be added to the connector's `table.include.list` and to the `cce_analytics_pub` publication. New columns are captured automatically, but ClickHouse DDL and ingestion need them (§10).
 4. **D1, `intelligence_event_log`.** Its `step_instance_id` is already nullable with no foreign key. What blocks group events there is its `NOT NULL` `step_status` column.
 5. **`selectionBehavior` default.** The discussion left it unsaid. See E1 and §4.2.
 6. **What marks a group.** The discussion says both "`groupingBehavior: logical-group`" and "an action with `groupingBehavior` set". These differ for `visual-group` and `sentence-group`. This design reads the rule as `logical-group` only (§4.2).
 7. **A group keeps `type: step`.** The discussion says a group action carries no type and that `validateActionTypes` must change. This design keeps groups typed `step` and tells them apart by `groupingBehavior: logical-group`. The validator and the parser walks then need no change, and the work moves to keeping groups out of the step list (§5.2).
 8. **How a scheduled repeat ends.** The discussion lists a fixed `count` or a `boundsPeriod` end. `boundsDuration`, a length counted from each patient's start, fits a template better and is supported here. `boundsRange` and `boundsPeriod.start` are rejected at load rather than ignored (§5.1).
-9. **Who works out when a group was done.** The discussion has step-sla read the group's steps when a deadline row falls due, with no calculated value stored. But step-sla parses no PlanDefinitions, and the step rows alone can't show a mandatory member that hasn't been created yet. So the matcher records the occurrence's `completed_at`, and step-sla judges from that (§6.1, §8.2).
+9. **Who works out when a group was done.** The discussion has step-sla read the group's steps when a deadline row falls due, with no calculated value stored. But step-sla parses no PlanDefinitions, and the step rows alone can't show a mandatory member that hasn't been created yet. So the matcher records the instance's `completed_at`, and step-sla judges from that (§6.1, §8.2).
 
 ---
 
@@ -850,7 +850,7 @@ These came from checking the discussion's proposals against the 2.0.0 code. Each
 | A group is treated as a step somewhere, since it is typed `step` | Test that `extractSteps`, `mustStepIds` and the dependency graph never return a group, that a step nested two groups deep is indexed and matched, and that a match on a group's action id is ignored. |
 | A group opened by its first step is judged late | Test that a group whose first step arrives early, and whose other steps follow by the planned due date, is `MET`. |
 | Double verdicts when a group deadline and step due dates both schedule rows | Test that steps under a group deadline get no `step_sla_state_transition` rows (§8.1). |
-| Group lifecycle is entirely new code | Test opening, entry members, deduplication within an occurrence, complete versus closed, stop conditions and B6 row selection directly, not only end to end. |
+| Group lifecycle is entirely new code | Test opening, entry members, deduplication within a group instance, complete versus closed, stop conditions and B6 row selection directly, not only end to end. |
 | A cross-service race goes unseen in tests | A same-JVM test won't reproduce matcher versus step-sla. An integration test needs both writers against one database. |
 | CDC silently drops the new table | Ship the pipeline changes (§10) in the same release as `V8`. |
 

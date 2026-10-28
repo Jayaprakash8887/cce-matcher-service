@@ -9,7 +9,7 @@ by entities in **cce-common-util** and documented there, once:
 
 - [Data Dictionary](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md) — columns, indexes, enums, JSONB shapes, and the full ER diagram
 - [Data Dictionary §3](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#3-ownership) — which service creates and which writes each table
-- [Step group occurrences](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#step-group-occurrences-step_group_instance) — `step_group_instance`, one row per occurrence of a step group, and the `step_group_instance_id` this service sets on `step_instance` when it opens a group
+- [Step group instances](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#step-group-instances-step_group_instance) — `step_group_instance`, one row per instance of a step group, and the `step_group_instance_id` this service sets on `step_instance` when it opens a group
 
 This service **runs the migration** for every table except the three the Protocol Service owns, so it
 creates far more tables than it documents here. Creating a table and mapping it are separate things:

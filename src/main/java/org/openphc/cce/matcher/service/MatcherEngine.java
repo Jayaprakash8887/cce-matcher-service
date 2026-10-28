@@ -318,7 +318,7 @@ public class MatcherEngine {
      * itself brings into being is due at {@code now}, the event's single clock reading.
      *
      * <p>A step in a step group is left to {@link StepInstanceService#findOrCreateGroupedStep}, which
-     * first decides, under the enrollment's lock, which occurrence of the group the event goes to.
+     * first decides, under the enrollment's lock, which instance of the group the event goes to.
      * Outside any group, the open row with the nearest due date is completed, or a new one created.
      */
     private StepInstance stepForEvent(ProtocolInstance protocolInstance, String stepActionId,

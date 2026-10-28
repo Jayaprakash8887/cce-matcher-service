@@ -18,9 +18,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * The rows of {@code step_group_instance}: finding an occurrence and opening one.
+ * The rows of {@code step_group_instance}: finding a group instance and opening one.
  *
- * <p>Creating the steps an occurrence holds is {@link StepInstanceService}'s job, which calls this
+ * <p>Creating the steps a group instance holds is {@link StepInstanceService}'s job, which calls this
  * service rather than the other way round. Every method here expects the caller to hold the
  * enrollment's lock ({@link #lock}).
  */
@@ -51,7 +51,7 @@ public class StepGroupService {
      * Lock the enrollment's row until the transaction ends, when its protocol has step groups.
      *
      * <p>Two events for one patient can be processed at once. Without the lock, each could open the same
-     * occurrence, or create the same step in it twice.
+     * instance, or create the same step in it twice.
      * A protocol without groups pays nothing.
      */
     public void lock(ProtocolInstance protocolInstance, ParsedProtocolCache.ParsedProtocol protocol) {
@@ -61,17 +61,17 @@ public class StepGroupService {
     }
 
     /**
-     * A group's latest cycle within one occurrence of its parent, or within the enrollment for a
+     * A group's latest cycle within one instance of its parent, or within the enrollment for a
      * top-level group: the one with the highest {@code cycle_index}. Empty when none has been opened.
      */
     public Optional<StepGroupInstance> latestCycle(ProtocolInstance protocolInstance, String groupActionId,
                                                    StepGroupInstance parent) {
         return groupInstanceRepository.findByProtocolInstanceIdAndGroupActionId(protocolInstance.getId(), groupActionId)
                 .stream()
-                .filter(occurrence -> parent == null
-                        ? occurrence.getParentGroupInstance() == null
-                        : occurrence.getParentGroupInstance() != null
-                                && Objects.equals(occurrence.getParentGroupInstance().getId(), parent.getId()))
+                .filter(groupInstance -> parent == null
+                        ? groupInstance.getParentGroupInstance() == null
+                        : groupInstance.getParentGroupInstance() != null
+                                && Objects.equals(groupInstance.getParentGroupInstance().getId(), parent.getId()))
                 .max(Comparator.comparingInt(StepGroupInstance::getCycleIndex));
     }
 
@@ -84,11 +84,11 @@ public class StepGroupService {
                 .isAfter(cycle.getOpenedAt().atZoneSameInstant(calendarZone).toLocalDate());
     }
 
-    /** Insert an occurrence; the caller holds the enrollment's lock and has found none, and the unique key is the backstop. */
+    /** Insert a group instance; the caller holds the enrollment's lock and has found none, and the unique key is the backstop. */
     public StepGroupInstance open(ProtocolInstance protocolInstance, String groupActionId,
                                   StepGroupInstance parent, int cycleIndex,
                                   OffsetDateTime dueDate, OffsetDateTime openedAt) {
-        StepGroupInstance occurrence = groupInstanceRepository.save(StepGroupInstance.builder()
+        StepGroupInstance groupInstance = groupInstanceRepository.save(StepGroupInstance.builder()
                 .protocolInstance(protocolInstance)
                 .parentGroupInstance(parent)
                 .groupActionId(groupActionId)
@@ -97,8 +97,8 @@ public class StepGroupService {
                 .openedAt(openedAt)
                 .build());
 
-        log.info("Opened step group occurrence: group={}, cycle={}, instanceId={}, occurrenceId={}, due={}",
-                groupActionId, cycleIndex, protocolInstance.getId(), occurrence.getId(), dueDate);
-        return occurrence;
+        log.info("Opened step group instance: group={}, cycle={}, instanceId={}, groupInstanceId={}, due={}",
+                groupActionId, cycleIndex, protocolInstance.getId(), groupInstance.getId(), dueDate);
+        return groupInstance;
     }
 }
