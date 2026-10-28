@@ -2,17 +2,19 @@
 
 > The two tables whose JPA entities belong to this service alone.
 
-Ten further tables — `protocol_definition`, `protocol_instance`, `step_instance`,
-`step_sla_state_transition`, `deviation`, `trigger_index`, `action_definition`,
-`intelligence_event_log` and the two state-transition history tables — are mapped by entities in
-**cce-common-util** and documented there, once:
+Eleven further tables — `protocol_definition`, `protocol_instance`, `step_instance`,
+`step_group_instance`, `step_sla_state_transition`, `deviation`, `trigger_index`,
+`action_definition`, `intelligence_event_log` and the two state-transition history tables — are mapped
+by entities in **cce-common-util** and documented there, once:
 
 - [Data Dictionary](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md) — columns, indexes, enums, JSONB shapes, and the full ER diagram
 - [Data Dictionary §3](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#3-ownership) — which service creates and which writes each table
+- [Step group occurrences](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#step-group-occurrences-step_group_instance) — `step_group_instance`, one row per occurrence of a step group, and the `step_group_instance_id` this service sets on `step_instance` when it opens a group
 
 This service **runs the migration** for every table except the three the Protocol Service owns, so it
 creates far more tables than it documents here. Creating a table and mapping it are separate things:
-the DDL is in `V1__initial_schema.sql`, the column reference is wherever the entity lives.
+the DDL is in `V1__initial_schema.sql` (and `V8__step_groups.sql` for `step_group_instance` and the
+`step_group_instance_id` columns), the column reference is wherever the entity lives.
 
 The history tables moved out in 2.0.0. Their entities now live in cce-common-util, because the
 Step SLA Service also appends to `step_instance_history` — recording each `sla_status` transition it

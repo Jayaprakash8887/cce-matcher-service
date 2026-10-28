@@ -50,7 +50,7 @@ class TriggerMatchingServiceTest {
 
             assertEquals(1, matches.size());
             assertEquals(protDefId, matches.get(0).protocolDefinitionId());
-            assertEquals(actionId, matches.get(0).actionId());
+            assertEquals(actionId, matches.get(0).stepActionId());
         }
 
         @Test
@@ -68,7 +68,7 @@ class TriggerMatchingServiceTest {
             List<MatchedStep> matches = service.findStructuralMatches(ResourceType.Observation, codes);
 
             assertEquals(1, matches.size());
-            assertEquals(actionId, matches.get(0).actionId());
+            assertEquals(actionId, matches.get(0).stepActionId());
         }
 
         @Test
@@ -196,7 +196,7 @@ class TriggerMatchingServiceTest {
 
             List<ConditionOnlyTrigger> retrieved = service.getConditionOnlyTriggers();
             assertEquals(1, retrieved.size());
-            assertEquals("global-risk", retrieved.get(0).actionId());
+            assertEquals("global-risk", retrieved.get(0).stepActionId());
             assertEquals("text/jsonlogic", retrieved.get(0).conditionLanguage());
         }
 
@@ -243,7 +243,7 @@ class TriggerMatchingServiceTest {
 
             List<ConditionOnlyTrigger> all = service.getConditionOnlyTriggers();
             assertEquals(1, all.size());
-            assertEquals("action-2", all.get(0).actionId());
+            assertEquals("action-2", all.get(0).stepActionId());
         }
     }
 }

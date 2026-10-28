@@ -7,13 +7,13 @@ import java.util.UUID;
  * These are evaluated via Tier 2 for every inbound event.
  *
  * @param protocolDefinitionId the protocol definition UUID
- * @param actionId             the action ID within the protocol
+ * @param stepActionId         the action id of the step the trigger belongs to
  * @param conditionLanguage    the expression language (e.g., "text/jsonlogic", "text/fhirpath")
  * @param conditionExpression  the expression string
  */
 public record ConditionOnlyTrigger(
         UUID protocolDefinitionId,
-        String actionId,
+        String stepActionId,
         String conditionLanguage,
         String conditionExpression) {
 }

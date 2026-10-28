@@ -7,7 +7,7 @@ import java.util.UUID;
  * that matched the inbound event's resource type and codes.
  *
  * @param protocolDefinitionId the matched protocol definition UUID
- * @param actionId             the matched action ID within the protocol
+ * @param stepActionId         the matched step's action id within the protocol
  */
-public record MatchedStep(UUID protocolDefinitionId, String actionId) {
+public record MatchedStep(UUID protocolDefinitionId, String stepActionId) {
 }
