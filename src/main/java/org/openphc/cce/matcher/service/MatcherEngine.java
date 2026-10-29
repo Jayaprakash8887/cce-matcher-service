@@ -47,6 +47,7 @@ public class MatcherEngine {
     private final ProtocolDefinitionService protocolDefinitionService;
     private final ProtocolInstanceService protocolInstanceService;
     private final StepInstanceService stepInstanceService;
+    private final StepCreationService stepCreationService;
     private final ParsedProtocolCache parsedProtocolCache;
     private final IntelligenceActionEvaluator intelligenceActionEvaluator;
     private final ClinicalEventTimeExtractor clinicalEventTimeExtractor;
@@ -66,6 +67,7 @@ public class MatcherEngine {
                             ProtocolDefinitionService protocolDefinitionService,
                             ProtocolInstanceService protocolInstanceService,
                             StepInstanceService stepInstanceService,
+                            StepCreationService stepCreationService,
                             ParsedProtocolCache parsedProtocolCache,
                             IntelligenceActionEvaluator intelligenceActionEvaluator,
                             ClinicalEventTimeExtractor clinicalEventTimeExtractor,
@@ -78,6 +80,7 @@ public class MatcherEngine {
         this.protocolDefinitionService = protocolDefinitionService;
         this.protocolInstanceService = protocolInstanceService;
         this.stepInstanceService = stepInstanceService;
+        this.stepCreationService = stepCreationService;
         this.parsedProtocolCache = parsedProtocolCache;
         this.intelligenceActionEvaluator = intelligenceActionEvaluator;
         this.clinicalEventTimeExtractor = clinicalEventTimeExtractor;
@@ -334,27 +337,25 @@ public class MatcherEngine {
 
         StepInstance actionableStep =
                 stepInstanceService.findActionableStep(protocolInstance.getId(), stepActionId, occurredAt);
-        return actionableStep != null
-                ? actionableStep
-                : createInitialStep(protocolInstance, stepActionId, stepMetadata, now);
+        if (actionableStep != null) {
+            return actionableStep;
+        }
+        if (stepMetadata == null) {
+            // An explicit match can name an action the protocol doesn't declare: a bare row, with no deadline.
+            return stepCreationService.createStep(protocolInstance, stepActionId, 0, now, null, null);
+        }
+        return createInitialStep(protocolInstance, stepMetadata, now);
     }
 
     /** A step outside any group that the event itself brings into being: due at {@code now}. */
-    private StepInstance createInitialStep(ProtocolInstance protocolInstance, String stepActionId,
+    private StepInstance createInitialStep(ProtocolInstance protocolInstance,
                                            PlanDefinitionParser.StepMetadata stepMetadata, OffsetDateTime now) {
-        OffsetDateTime missedDate = null;
-        String requiredBehavior = null;
-
-        if (stepMetadata != null) {
-            requiredBehavior = stepMetadata.requiredBehavior();
-            // tolerance-days is the single grace window: missedDate = dueDate + tolerance.
-            if (stepMetadata.toleranceDays() != null) {
-                missedDate = now.plusDays(stepMetadata.toleranceDays());
-            }
-        }
-
-        return stepInstanceService.createStep(protocolInstance, stepActionId, 0,
-                now, missedDate, requiredBehavior);
+        // tolerance-days is the single grace window: missedDate = dueDate + tolerance.
+        OffsetDateTime missedDate = stepMetadata.toleranceDays() != null
+                ? now.plusDays(stepMetadata.toleranceDays())
+                : null;
+        return stepCreationService.createStep(protocolInstance, stepMetadata.id(), 0,
+                now, missedDate, stepMetadata.requiredBehavior());
     }
 
     /** A matched action's metadata, or null when the protocol declares no such action. */

@@ -40,6 +40,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -79,6 +80,7 @@ class StepGroupLifecycleTest {
     private final List<StepGroupInstance> groupRows = new ArrayList<>();
 
     private StepInstanceService service;
+    private StepCreationService stepCreationService;
     private ProtocolInstance enrollment;
     private ParsedProtocolCache.ParsedProtocol protocol;
 
@@ -89,11 +91,13 @@ class StepGroupLifecycleTest {
 
     @BeforeEach
     void setUp() {
-        StepGroupService groupService = new StepGroupService(groupInstanceRepository, protocolInstanceRepository,
-                KIGALI);
+        stepCreationService = new StepCreationService(stepInstanceRepository, slaScheduleService,
+                stateTransitionHistoryWriter);
+        StepGroupService groupService = new StepGroupService(groupInstanceRepository, stepCreationService, KIGALI);
         service = new StepInstanceService(stepInstanceRepository, parsedProtocolCache, deviationRecorder,
                 intelligenceActionEvaluator, stateTransitionHistoryWriter, slaScheduleService,
-                slaThresholdReader, groupService);
+                slaThresholdReader, groupService, stepCreationService,
+                new ProtocolInstanceService(protocolInstanceRepository, stateTransitionHistoryWriter));
 
         enrollment = ProtocolInstance.builder()
                 .id(UUID.randomUUID())
@@ -146,10 +150,12 @@ class StepGroupLifecycleTest {
             }
             return row;
         });
-        when(groupInstanceRepository.findByProtocolInstanceIdAndGroupActionId(any(), any()))
+        when(groupInstanceRepository.findLatestCycle(any(), any(), any()))
                 .thenAnswer(i -> groupRows.stream()
                         .filter(g -> g.getGroupActionId().equals(i.getArgument(1)))
-                        .toList());
+                        .filter(g -> Objects.equals(i.getArgument(2),
+                                g.getParentGroupInstance() == null ? null : g.getParentGroupInstance().getId()))
+                        .max(Comparator.comparingInt(StepGroupInstance::getCycleIndex)));
     }
 
     // ── Protocols ──
@@ -219,7 +225,7 @@ class StepGroupLifecycleTest {
             return service.findOrCreateGroupedStep(enrollment, metadata, at, at);
         }
         StepInstance row = service.findActionableStep(enrollment.getId(), actionId, at);
-        return row != null ? row : service.createStep(enrollment, actionId, 0, at, null, metadata.requiredBehavior());
+        return row != null ? row : stepCreationService.createStep(enrollment, actionId, 0, at, null, metadata.requiredBehavior());
     }
 
     private List<StepInstance> rowsFor(String actionId) {
@@ -481,8 +487,8 @@ class StepGroupLifecycleTest {
             StepGroupInstance secondVisit = groupInstance("journey", null, 1, T0.plusDays(14));
             StepGroupInstance secondInFirstVisit = groupInstance("consultation", firstVisit, 1, T0.plusHours(5));
             StepGroupInstance firstInSecondVisit = groupInstance("consultation", secondVisit, 0, T0.plusDays(14));
-            service.createStep(enrollment, "history", 0, T0.plusHours(5), null, "must", secondInFirstVisit);
-            StepInstance latest = service.createStep(
+            stepCreationService.createStep(enrollment, "history", 0, T0.plusHours(5), null, "must", secondInFirstVisit);
+            StepInstance latest = stepCreationService.createStep(
                     enrollment, "history", 0, T0.plusDays(14), null, "must", firstInSecondVisit);
 
             assertSame(latest, rowFor("history", T0.plusHours(5)));
@@ -764,8 +770,8 @@ class StepGroupLifecycleTest {
 
         @Test
         void anEventCompletesTheOpenRowWhoseDueDateIsNearestItsClinicalTime() {
-            StepInstance january = service.createStep(enrollment, "vitals", 0, T0, null, "must");
-            StepInstance april = service.createStep(enrollment, "vitals", 1, T0.plusMonths(3), null, "must");
+            StepInstance january = stepCreationService.createStep(enrollment, "vitals", 0, T0, null, "must");
+            StepInstance april = stepCreationService.createStep(enrollment, "vitals", 1, T0.plusMonths(3), null, "must");
 
             assertSame(april, service.findActionableStep(enrollment.getId(), "vitals", T0.plusMonths(3).plusDays(2)));
             assertSame(january, service.findActionableStep(enrollment.getId(), "vitals", T0.plusDays(10)));
@@ -773,16 +779,16 @@ class StepGroupLifecycleTest {
 
         @Test
         void twoRowsWithNoDueDate_theOlderComesFirst() {
-            StepInstance older = service.createStep(enrollment, "vitals", 0, null, null, "must");
-            service.createStep(enrollment, "vitals", 1, null, null, "must");
+            StepInstance older = stepCreationService.createStep(enrollment, "vitals", 0, null, null, "must");
+            stepCreationService.createStep(enrollment, "vitals", 1, null, null, "must");
 
             assertSame(older, service.findActionableStep(enrollment.getId(), "vitals", T0));
         }
 
         @Test
         void aRowWithNoDueDateComesAfterDatedOnes() {
-            StepInstance undated = service.createStep(enrollment, "vitals", 0, null, null, "must");
-            StepInstance dated = service.createStep(enrollment, "vitals", 1, T0, null, "must");
+            StepInstance undated = stepCreationService.createStep(enrollment, "vitals", 0, null, null, "must");
+            StepInstance dated = stepCreationService.createStep(enrollment, "vitals", 1, T0, null, "must");
 
             assertSame(dated, service.findActionableStep(enrollment.getId(), "vitals", T0.plusYears(1)));
             assertNotNull(undated.getId());
@@ -817,8 +823,8 @@ class StepGroupLifecycleTest {
 
         @Test
         void anExaminationLeftUndoneInAnEarlierCycleRaisesNoOrderViolation() {
-            service.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
-            StepInstance examination = service.createStep(
+            stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
+            StepInstance examination = stepCreationService.createStep(
                     enrollment, "examination", 0, T0.plusDays(14), null, "must", current);
             service.completeStep(examination, UUID.randomUUID(), "test", T0.plusDays(14));
 
@@ -831,8 +837,8 @@ class StepGroupLifecycleTest {
 
         @Test
         void anEventGoesToTheLatestCycle_evenWhenAnEarlierCycleRowIsNearerItsClinicalTime() {
-            service.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
-            StepInstance latest = service.createStep(
+            stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
+            StepInstance latest = stepCreationService.createStep(
                     enrollment, "examination", 0, T0.plusDays(14), null, "must", current);
 
             assertSame(latest, rowFor("examination", T0.plusDays(1)));
@@ -840,8 +846,8 @@ class StepGroupLifecycleTest {
 
         @Test
         void anEarlierCycleRowIsNeverCompletedByALaterEvent() {
-            StepInstance undone = service.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
-            StepInstance latest = service.createStep(
+            StepInstance undone = stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
+            StepInstance latest = stepCreationService.createStep(
                     enrollment, "examination", 0, T0.plusDays(14), null, "must", current);
             service.completeStep(latest, UUID.randomUUID(), "test", T0.plusDays(14));
 
@@ -854,11 +860,11 @@ class StepGroupLifecycleTest {
 
         @Test
         void aPredecessorMissingFromThisCycleIsBackfilledIntoIt_evenThoughAnEarlierCycleHasOne() {
-            StepInstance done = service.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
+            StepInstance done = stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
             service.completeStep(done, UUID.randomUUID(), "test", T0);
             int examinationsBefore = rowsFor("examination").size();
 
-            StepInstance prescription = service.createStep(
+            StepInstance prescription = stepCreationService.createStep(
                     enrollment, "prescription", 0, T0.plusDays(14), null, "must", current);
             service.completeStep(prescription, UUID.randomUUID(), "test", T0.plusDays(14));
 
@@ -911,7 +917,7 @@ class StepGroupLifecycleTest {
 
         @Test
         void aGroupWaitsWhileAnotherPrerequisiteIsInFlight_thenTakesTheLatestDueDate() {
-            service.createStep(enrollment, "labs", 0, T0.plusDays(2), null, "must");
+            stepCreationService.createStep(enrollment, "labs", 0, T0.plusDays(2), null, "must");
             record("assessment", T0);
             assertTrue(groupInstanceOf("review").isEmpty(), "the labs are still outstanding");
 

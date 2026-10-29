@@ -51,6 +51,7 @@ class MatcherEngineTest {
     @Mock private ProtocolDefinitionService protocolDefinitionService;
     @Mock private ProtocolInstanceService protocolInstanceService;
     @Mock private StepInstanceService stepInstanceService;
+    @Mock private StepCreationService stepCreationService;
     @Mock private ParsedProtocolCache parsedProtocolCache;
     @Mock private IntelligenceActionEvaluator intelligenceActionEvaluator;
     @Mock private ClinicalEventTimeExtractor clinicalEventTimeExtractor;
@@ -67,7 +68,7 @@ class MatcherEngineTest {
         engine = new MatcherEngine(eventLogService, resourceTypeDetector, eventCodesExtractor,
                 triggerMatchingService, fhirExpressionEvaluator,
                 protocolDefinitionService, protocolInstanceService,
-                stepInstanceService, parsedProtocolCache,
+                stepInstanceService, stepCreationService, parsedProtocolCache,
                 intelligenceActionEvaluator, clinicalEventTimeExtractor, meterRegistry);
     }
 
@@ -329,12 +330,12 @@ class MatcherEngineTest {
             when(stepInstanceService.findActionableStep(eq(protocolInstanceId), eq("new-action"), any())).thenReturn(null);
             // createInitialStep reads the definition off the instance, so no findById stub is needed
             mockParserReturnsActionForInitialStep(protocolDef, "new-action", 3, "must");
-            when(stepInstanceService.createStep(eq(protocolInstance), eq("new-action"),
+            when(stepCreationService.createStep(eq(protocolInstance), eq("new-action"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);
 
             engine.processInboundEvent(event);
 
-            verify(stepInstanceService).createStep(eq(protocolInstance), eq("new-action"),
+            verify(stepCreationService).createStep(eq(protocolInstance), eq("new-action"),
                     eq(0), any(), any(), eq("must"));
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()), any());
             verify(intelligenceActionEvaluator).evaluateOnCompletion(eq(newStep), any());
@@ -366,7 +367,7 @@ class MatcherEngineTest {
 
             // The group decides which instance the event goes to before any row is looked for.
             verify(stepInstanceService, never()).findActionableStep(any(), any(), any());
-            verify(stepInstanceService, never()).createStep(any(), any(), anyInt(), any(), any(), any());
+            verify(stepCreationService, never()).createStep(any(), any(), anyInt(), any(), any(), any());
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()), any());
         }
     }
@@ -494,12 +495,12 @@ class MatcherEngineTest {
                     .thenReturn(protocolInstance);
             when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("first-step"), any()))
                     .thenReturn(null);
-            when(stepInstanceService.createStep(eq(protocolInstance), eq("first-step"),
+            when(stepCreationService.createStep(eq(protocolInstance), eq("first-step"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);
 
             engine.processInboundEvent(event);
 
-            verify(stepInstanceService).createStep(eq(protocolInstance), eq("first-step"),
+            verify(stepCreationService).createStep(eq(protocolInstance), eq("first-step"),
                     eq(0), any(), any(), eq("must"));
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()), any());
         }
@@ -540,14 +541,14 @@ class MatcherEngineTest {
                     .thenReturn(protocolInstance);
             when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("consent-request"), any()))
                     .thenReturn(null);
-            when(stepInstanceService.createStep(eq(protocolInstance), eq("consent-request"),
+            when(stepCreationService.createStep(eq(protocolInstance), eq("consent-request"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);
 
             engine.processInboundEvent(event);
             OffsetDateTime afterProcessing = OffsetDateTime.now(ZoneOffset.UTC);
 
             ArgumentCaptor<OffsetDateTime> dueDate = ArgumentCaptor.forClass(OffsetDateTime.class);
-            verify(stepInstanceService).createStep(eq(protocolInstance), eq("consent-request"),
+            verify(stepCreationService).createStep(eq(protocolInstance), eq("consent-request"),
                     eq(0), dueDate.capture(), any(), eq("must"));
             ArgumentCaptor<OffsetDateTime> completedAt = ArgumentCaptor.forClass(OffsetDateTime.class);
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()),
@@ -582,14 +583,14 @@ class MatcherEngineTest {
             mockParserReturnsActionForInitialStep(protocolDef, "new-action", 3, "must");
             when(resourceTypeDetector.detect(event.getData())).thenReturn(ResourceType.Observation);
             when(clinicalEventTimeExtractor.extract(eq(ResourceType.Observation), any())).thenReturn(threeHoursAhead);
-            when(stepInstanceService.createStep(eq(protocolInstance), eq("new-action"),
+            when(stepCreationService.createStep(eq(protocolInstance), eq("new-action"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);
 
             engine.processInboundEvent(event);
 
             ArgumentCaptor<OffsetDateTime> dueDate = ArgumentCaptor.forClass(OffsetDateTime.class);
             ArgumentCaptor<OffsetDateTime> missedDate = ArgumentCaptor.forClass(OffsetDateTime.class);
-            verify(stepInstanceService).createStep(eq(protocolInstance), eq("new-action"),
+            verify(stepCreationService).createStep(eq(protocolInstance), eq("new-action"),
                     eq(0), dueDate.capture(), missedDate.capture(), eq("must"));
             ArgumentCaptor<OffsetDateTime> completedAt = ArgumentCaptor.forClass(OffsetDateTime.class);
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()),
@@ -626,13 +627,13 @@ class MatcherEngineTest {
                     .thenReturn(protocolInstance);
             when(stepInstanceService.findActionableStep(eq(protocolInstance.getId()), eq("first-step"), any()))
                     .thenReturn(null);
-            when(stepInstanceService.createStep(eq(protocolInstance), eq("first-step"),
+            when(stepCreationService.createStep(eq(protocolInstance), eq("first-step"),
                     eq(0), any(), any(), eq("must"))).thenReturn(newStep);
 
             engine.processInboundEvent(event);
 
             ArgumentCaptor<OffsetDateTime> dueDate = ArgumentCaptor.forClass(OffsetDateTime.class);
-            verify(stepInstanceService).createStep(eq(protocolInstance), eq("first-step"),
+            verify(stepCreationService).createStep(eq(protocolInstance), eq("first-step"),
                     eq(0), dueDate.capture(), any(), eq("must"));
             ArgumentCaptor<OffsetDateTime> completedAt = ArgumentCaptor.forClass(OffsetDateTime.class);
             verify(stepInstanceService).completeStep(eq(newStep), eq(eventLog.getId()), eq(event.getSource()),

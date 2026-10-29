@@ -5,6 +5,7 @@ import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.history.StateTransitionHistoryWriter;
 import org.openphc.cce.common.enums.ProtocolInstanceStatus;
+import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.repository.ProtocolInstanceRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -65,6 +66,19 @@ public class ProtocolInstanceService {
                 patientId, protocolDef.getCanonical(), instance.getId());
 
         return instance;
+    }
+
+    /**
+     * Lock the enrollment's row until the transaction ends, when its protocol has step groups.
+     *
+     * <p>Two events for one patient can be processed at once. Without the lock, each could open the same
+     * group instance, or create the same step in it twice. The row itself is not changed: the lock is a
+     * mutex for the enrollment's group work. A protocol without groups pays nothing.
+     */
+    public void lockForStepGroups(ProtocolInstance protocolInstance, ParsedProtocolCache.ParsedProtocol protocol) {
+        if (protocol.hasGroups()) {
+            protocolInstanceRepository.findByIdForUpdate(protocolInstance.getId());
+        }
     }
 
     @Transactional(readOnly = true)

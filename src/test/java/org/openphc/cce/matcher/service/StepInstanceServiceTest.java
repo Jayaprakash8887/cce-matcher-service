@@ -21,6 +21,7 @@ import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.enums.*;
+import org.openphc.cce.common.repository.StepGroupInstanceRepository;
 import org.openphc.cce.common.repository.StepInstanceRepository;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
@@ -67,19 +68,26 @@ class StepInstanceServiceTest {
     private SlaThresholdReader slaThresholdReader;
 
     @Mock
-    private StepGroupService stepGroupService;
+    private StepGroupInstanceRepository groupInstanceRepository;
+
+    @Mock
+    private ProtocolInstanceService protocolInstanceService;
 
     private StepInstanceService service;
+    private StepCreationService stepCreationService;
     private ObjectMapper objectMapper;
 
     @BeforeEach
     void setUp() {
         objectMapper = new ObjectMapper();
         objectMapper.registerModule(new JavaTimeModule());
+        stepCreationService = new StepCreationService(stepInstanceRepository, slaScheduleService,
+                stateTransitionHistoryWriter);
         service = new StepInstanceService(stepInstanceRepository,
                 parsedProtocolCache, deviationRecorder,
                 intelligenceActionEvaluator, stateTransitionHistoryWriter, slaScheduleService,
-                slaThresholdReader, stepGroupService);
+                slaThresholdReader, new StepGroupService(groupInstanceRepository, stepCreationService, ZoneOffset.UTC),
+                stepCreationService, protocolInstanceService);
 
         // Default: no SLA thresholds. Tests that care stub them per step via buildStep/stubThresholds.
         lenient().when(slaThresholdReader.getThresholds(any()))
@@ -114,7 +122,7 @@ class StepInstanceServiceTest {
                 return s;
             });
 
-            StepInstance result = service.createStep(protocolInstance, "bp-check", 0,
+            StepInstance result = stepCreationService.createStep(protocolInstance, "bp-check", 0,
                     dueDate, missedDate, "must");
 
             assertNotNull(result.getId());
