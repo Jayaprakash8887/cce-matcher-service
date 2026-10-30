@@ -205,7 +205,7 @@ public class StepInstanceService {
         // Read once, to anchor an after-start dependent to when this step became active. Not used to
         // settle this step's own SLA: that is the Step SLA Service's judgement, made on its next
         // sweep, by comparing the completed_at recorded below against each threshold.
-        SlaThresholdReader.SlaThresholds thresholds = slaThresholdReader.getThresholds(stepInstance.getId());
+        SlaThresholdReader.SlaThresholds slaThresholds = slaThresholdReader.getThresholds(stepInstance.getId());
 
         recordCompletion(stepInstance, matchedEventId, completedBySource, occurredAt);
 
@@ -214,7 +214,7 @@ public class StepInstanceService {
         Enrollment enrollment = lockAndLoad(protocolInstance, parsedProtocol(protocolInstance));
 
         orderViolationDetector.detectOrderViolations(enrollment, stepInstance);
-        progressiveInstantiationService.instantiateDependents(enrollment, stepInstance, thresholds);
+        progressiveInstantiationService.instantiateDependents(enrollment, stepInstance, slaThresholds);
         mandatoryStepBackfillService.backfillMissingMandatorySteps(enrollment, stepInstance);
     }
 
