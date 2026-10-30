@@ -213,7 +213,11 @@ org.openphc.cce.matcher
                                      #   EventCodesExtractor (codes; the resource type
                                      #   comes from common-util's ResourceTypeDetector),
                                      #   TriggerMatchingService,
-                                     #   StepInstanceService,
+                                     #   StepInstanceService (the step instance an event
+                                     #   completes, and completing it), StepGroupService,
+                                     #   StepInstanceScope, OrderViolationDetector,
+                                     #   ProgressiveInstantiationService,
+                                     #   MandatoryStepBackfillService, StepCreationService,
                                      #   StepSlaScheduleService, ProtocolDefinitionService,
                                      #   ProtocolInstanceService, MatcherEventLogService,
                                      #   StateTransitionHistoryWriter, FacilityService
@@ -327,9 +331,9 @@ Values are parsed leniently (partial precision `2026` / `2026-03` / full timesta
 2. **CloudEvent envelope `time`** — the emitter/adaptor's transmission clock; stable across retries/DLQ replay. Used for non-FHIR (`application/json`) payloads and as the FHIR fallback.
 3. **`now()`** — defensive last resort.
 
-The resolved time is **clamped to `now()`** in `StepInstanceService.completeStep` (a step cannot have completed in the future; a bad or skewed source clock must not push downstream schedules out). Unmapped resource types fall through to `now()`, which is never worse than the ingestion time.
+The resolved time is **clamped to `now()`** in `StepInstanceService.completeStepInstance` (a step cannot have completed in the future; a bad or skewed source clock must not push downstream schedules out). Unmapped resource types fall through to `now()`, which is never worse than the ingestion time.
 
-**Enrollment anchoring:** the same `resolveOccurredAt(event)` result is also used as `ProtocolInstance.enrolled_at`. So a patient's enrollment — and any downstream analytics that date-filter cohorts on `enrolled_at` — reflects when they *clinically* entered care, not when the event was processed, consistent with step completion. Enrollment is idempotent, so `enrolled_at` is fixed by the first matching event to be processed. Unlike `completed_at`, enrollment does **not** apply the `completeStep` future-clamp (it does not anchor step schedules — those anchor on `completed_at`), so its only clock guard is `resolveOccurredAt`'s own `now()` last resort.
+**Enrollment anchoring:** the same `resolveOccurredAt(event)` result is also used as `ProtocolInstance.enrolled_at`. So a patient's enrollment — and any downstream analytics that date-filter cohorts on `enrolled_at` — reflects when they *clinically* entered care, not when the event was processed, consistent with step completion. Enrollment is idempotent, so `enrolled_at` is fixed by the first matching event to be processed. Unlike `completed_at`, enrollment does **not** apply the `completeStepInstance` future-clamp (it does not anchor step schedules — those anchor on `completed_at`), so its only clock guard is `resolveOccurredAt`'s own `now()` last resort.
 
 > **Late-arriving completions:** when ingestion lag exceeds a dependent step's offset, that step can be created with its `MISSED_DATE_REACHED` row already due and transition (possibly recording a deviation) at the evaluator's next cycle. This is real-world-accurate — the step genuinely is late — and is a consequence of anchoring to clinical time.
 
@@ -558,13 +562,13 @@ What follows is what *this* service does within them.
 
 **Required behavior:** only `requiredBehavior=must` (from `PlanDefinition.action.requiredBehavior`) is mandatory; anything else, an absent value included, is optional. An optional step has no deadline, so it gets **no `step_sla_state_transition` rows at all** — no due date, no missed date, and no `MET_CONDITION_REACHED` — and its `sla_status` stays null for good. Nothing was required of it, so there is nothing for it to breach and no deadline it can be said to have beaten. A PlanDefinition that gives an optional action a `tolerance-days` is rejected by the Protocol Service at load, and `RequiredBehavior.isMandatory` is the single definition all of this shares with progressive instantiation.
 
-**Backfilling unrecorded mandatory predecessors:** progressive instantiation only works *forward* from a completed step, so a step created reactively from its own trigger (`MatcherEngine.createInitialStep`) leaves the mandatory steps that should have preceded it with **no `step_instance` row at all** — e.g. a `treatment` event arriving for a patient whose `vitals-recording`, `consultation` and `diagnosis` were never reported. Those steps read as "not started" in the journey view and, having no row, have no scheduled transition either, so they never surface as a deviation.
+**Backfilling unrecorded mandatory predecessors:** progressive instantiation only works *forward* from a completed step, so a step created reactively from its own trigger (`StepInstanceService.stepInstanceForEvent`) leaves the mandatory steps that should have preceded it with **no `step_instance` row at all** — e.g. a `treatment` event arriving for a patient whose `vitals-recording`, `consultation` and `diagnosis` were never reported. Those steps read as "not started" in the journey view and, having no row, have no scheduled transition either, so they never surface as a deviation.
 
-`StepInstanceService.backfillMissingMandatorySteps` closes that gap. After every completion, any mandatory step that is a transitive `relatedAction` predecessor of the progress observed so far (`PlanDefinitionParser.computeMustPredecessorSteps`) but that has no `step_instance` row is created with `step_status = NOT_STARTED` and no SLA judgement yet:
+`MandatoryStepBackfillService.backfillMissingMandatorySteps` closes that gap. After every completion, any mandatory step that is a transitive `relatedAction` predecessor of the progress observed so far (`PlanDefinitionParser.computeMustPredecessorSteps`) but that has no `step_instance` row is created with `step_status = NOT_STARTED` and no SLA judgement yet:
 
 - **Scope — predecessors only** — the backfill covers work that is *already late*, never mandatory work still ahead in the chain. Materializing steps still ahead would stamp them with this completion's time and flatten the schedule their own `relatedAction` offsets define (e.g. `lab-results`' `+3d` after `lab-order`), so they are left to progressive instantiation, which creates them on their predecessor's completion with the intended due dates. For example, completing `chief-complaints` does **not** backfill `diagnosis`; a later `treatment` completion does, because `diagnosis` is then a predecessor of observed progress.
-- **Dates** — the scheduled due date is the clinical completion time of the step that revealed the gap. Every backfilled step is a prerequisite that should already have happened, so they are all equally past due and there is no future schedule left to preserve among them. The missed threshold is derived from the step's `tolerance-days` extension. The Step SLA Service then drives `sla_status` from null to `OVERDUE` to `MISSED`, so mandatory work that is never recorded surfaces as a `MISSED` deviation. If the event does arrive later, `findActionableStep` picks the row up and completes it — and because Matcher does not judge timeliness, the breach the Step SLA Service records still reflects the `completed_at` it finds. A step with no `tolerance-days` gets no missed threshold and therefore never advances past `OVERDUE`. Only mandatory steps are scheduled at all: `StepSlaScheduleService` writes no transition row for a step whose `requiredBehavior` is not `must`, since nothing was required of it and so nothing can be breached.
-- **Ordering within `completeStep`** — backfill runs *after* `detectOrderViolations`, so a freshly backfilled row is never counted as an incomplete prerequisite for the completion that revealed it; this pass does not invent an `ORDER_VIOLATION`. Subsequent completions do see those rows, so a genuinely out-of-order journey raises `ORDER_VIOLATION` from the next completion onward.
+- **Dates** — the scheduled due date is the clinical completion time of the step that revealed the gap. Every backfilled step is a prerequisite that should already have happened, so they are all equally past due and there is no future schedule left to preserve among them. The missed threshold is derived from the step's `tolerance-days` extension. The Step SLA Service then drives `sla_status` from null to `OVERDUE` to `MISSED`, so mandatory work that is never recorded surfaces as a `MISSED` deviation. If the event does arrive later, `stepInstanceForEvent` picks the row up and completes it — and because Matcher does not judge timeliness, the breach the Step SLA Service records still reflects the `completed_at` it finds. A step with no `tolerance-days` gets no missed threshold and therefore never advances past `OVERDUE`. Only mandatory steps are scheduled at all: `StepSlaScheduleService` writes no transition row for a step whose `requiredBehavior` is not `must`, since nothing was required of it and so nothing can be breached.
+- **Ordering within `completeStepInstance`** — backfill runs *after* the order-violation check (`OrderViolationDetector`), so a freshly backfilled row is never counted as an incomplete prerequisite for the completion that revealed it; this pass does not invent an `ORDER_VIOLATION`. Subsequent completions do see those rows, so a genuinely out-of-order journey raises `ORDER_VIOLATION` from the next completion onward.
 - **Idempotent** — a mandatory step that already has any row, in any state (pre-existing, terminal, or created earlier in the same transaction by progressive instantiation), is left alone. One row per step (`repeat_index` 0) regardless of `timing.repeat.count`: this is a placeholder for work never recorded, not a scheduled recurrence.
 
 ### 6.2 Protocol Instance
@@ -767,9 +771,9 @@ Both ordering families are normalized into one directed graph by `PlanDefinition
 
 **Key design decisions:**
 - `StepMetadata` is a flat record with 9 fields (no `subSteps` list): `id`, `title`, `triggers`, `relatedSteps`, `timing`, `toleranceDays`, `requiredBehavior`, `intelligenceActions`, `groupId`
-- Plain nesting is **organizational only** — it groups a sub-step under its enclosing action but does **not** create an implicit `relatedStep`/dependency link. Ordering between a parent and its sub-steps (and among sub-steps) must be expressed explicitly via `relatedAction`. A sub-step with no explicit prerequisite is created independently whenever its own trigger fires (`MatcherEngine.createInitialStep`), exactly like a top-level step — it does not wait for its parent to complete. Whether a sub-step waits on its parent is the protocol author's clinical decision, expressed with `relatedAction`.
+- Plain nesting is **organizational only** — it groups a sub-step under its enclosing action but does **not** create an implicit `relatedStep`/dependency link. Ordering between a parent and its sub-steps (and among sub-steps) must be expressed explicitly via `relatedAction`. A sub-step with no explicit prerequisite is created independently whenever its own trigger fires (`StepInstanceService.stepInstanceForEvent`), exactly like a top-level step — it does not wait for its parent to complete. Whether a sub-step waits on its parent is the protocol author's clinical decision, expressed with `relatedAction`.
 - `groupId` is the step's nearest enclosing step group, or null outside any group (§6.5). Plain nesting under a step records nothing.
-- A sub-step whose `relatedAction` names a sibling as its prerequisite is flattened as-is and created progressively via standard `createDependentSteps()` logic
+- A sub-step whose `relatedAction` names a sibling as its prerequisite is flattened as-is and created progressively via standard progressive instantiation (`ProgressiveInstantiationService`)
 - **Fan-in** — a step may declare several prerequisites. It is instantiated only once none of the others is still outstanding (`step_status=NOT_STARTED` with `sla_status` still null or `OVERDUE`), so its due date anchors to the last prerequisite to finish rather than whichever completed first. A prerequisite with no `step_instance` row at all does not block, since waiting on work that may never be recorded would strand the dependent step permanently.
 - All trigger indexing uses the step's **plain action ID** (e.g., `"anc-visit-1-referral"`)
 - Intelligence actions are found via flat lookup by `actionId` (no tree traversal needed)
@@ -837,20 +841,22 @@ The intelligence action (`anc-visit-1-escalation`) is extracted into `anc-visit-
 sequenceDiagram
     participant Engine as MatcherEngine
     participant SIS as StepInstanceService
+    participant PI as ProgressiveInstantiationService
     participant DB as step_instance
 
     Note over Engine: Event matches "anc-visit-1" → step created & completed (own trigger)
-    Engine->>SIS: completeStep(anc-visit-1)
-    Note over SIS: createDependentSteps() — no step declares anc-visit-1 as its prerequisite, nothing created
+    Engine->>SIS: completeStepInstance(anc-visit-1)
+    SIS->>PI: instantiateDependents()
+    Note over PI: no step declares anc-visit-1 as its prerequisite, nothing created
 
     Note over Engine: Later, independently — a ServiceRequest event matches<br/>"anc-visit-1-referral"'s own trigger
-    Engine->>Engine: createInitialStep(anc-visit-1-referral)<br/>(no dependency on anc-visit-1 — nesting is organizational only)
-    Engine->>SIS: completeStep(anc-visit-1-referral)
-    SIS->>SIS: createDependentSteps() — finds "anc-visit-1-referral-ack"<br/>(its relatedAction names anc-visit-1-referral, relationship after-end)
-    SIS->>DB: Create anc-visit-1-referral-ack (NOT_STARTED, no SLA judgement)
+    Engine->>SIS: stepInstanceForEvent(anc-visit-1-referral)<br/>(none open, so created: no dependency on anc-visit-1 — nesting is organizational only)
+    Engine->>SIS: completeStepInstance(anc-visit-1-referral)
+    SIS->>PI: instantiateDependents() — finds "anc-visit-1-referral-ack"<br/>(its relatedAction names anc-visit-1-referral, relationship after-end)
+    PI->>DB: Create anc-visit-1-referral-ack (NOT_STARTED, no SLA judgement)
 
     Note over Engine: Later — event matches "anc-visit-1-referral-ack" → completed
-    Engine->>SIS: completeStep(anc-visit-1-referral-ack)
+    Engine->>SIS: completeStepInstance(anc-visit-1-referral-ack)
 ```
 
 #### Trigger Indexing
@@ -868,8 +874,8 @@ All steps (regardless of original nesting level) are indexed in `trigger_index` 
 An action typed `step` with `groupingBehavior: logical-group` is a **step group**: a set of steps that belong together clinically, such as one antenatal-care visit. A group is never matched to an event and never becomes a `StepMetadata`; only its steps do (`PlanDefinitionParser.extractGroups` returns groups separately). Each instance of a group for an enrollment is one `step_group_instance` row, nested groups point to their parent instance, and each step row points to its direct group's instance through `step_instance.step_group_instance_id`. The design is in [design-repeating-step-groups.md](design-repeating-step-groups.md), and what is built when in [implementation-plan-step-groups.md](implementation-plan-step-groups.md).
 
 **Opening a group instance.** A group has no trigger, so something else opens it:
-- an event for one of its steps, when the group has no instance yet, or when the event starts a new cycle (below): `StepGroupService.groupInstanceForEvent` opens it, and any unopened enclosing instances, and `StepInstanceService.findOrCreateGroupedStep` attaches the step to it;
-- its predecessor step completing, when the group follows a step (progressive instantiation);
+- an event for one of its steps, when the group has no instance yet, or when the event starts a new cycle (below): `StepGroupService.groupInstanceForEvent` opens it, and any unopened enclosing instances, and `StepInstanceService.stepInstanceForEvent` attaches the step to it;
+- its predecessor step completing, when the group follows a step (progressive instantiation, through `StepGroupService.openFollowingGroup`);
 - its parent instance opening, when it is a mandatory member of the parent with no predecessor inside it.
 
 Opening a group instance creates its mandatory member steps with no predecessor inside the group, and opens its mandatory nested groups with none (`PlanDefinitionParser.membersCreatedOnOpen`). An optional group is never opened in advance, only when one of its steps is matched. Nor is a `calendar-day` group: only an event for one of its steps opens one of its cycles, so a cycle's day is a day the patient came. A step or group that follows a step, inside a `calendar-day` group with no cycle yet, waits for that event.
@@ -882,9 +888,16 @@ Earlier cycles stay open: nothing closes them yet.
 
 **Due dates.** A group instance's due date is the one the protocol plans: its predecessor's completion plus the `relatedAction` offset, or its parent instance's due date. A predecessor that shares a group with it is read in the same instance, so a second visit's Consultation counts from that visit's check-in. It is never the time of the event that happened to open it, which would make the group's later steps late as soon as they arrived. A cycle opened because the patient came back, cycle 1 onwards of a `cycle-boundary` group, has no due date: its predecessor's completion plus offset would already be past. Steps created with the instance take its due date. When none can be worked out, for a top-level group with no predecessor for example, they get no due date and no `step_sla_state_transition` rows, so they show as pending and are never judged.
 
-**Which row an event completes.** For a step in a group, the instance is chosen first, under the lock below: from the top-level group down, each group's latest cycle within its parent's, or a new cycle by the rules above. The event completes the step's open row in that instance, or adds a further completed row there. An earlier cycle's open row is never completed, whatever the event's clinical time. A step outside any group completes the open row whose due date is nearest the event's clinical time (`findActionableStep`), or a new row is created (`MatcherEngine.createInitialStep`).
+**When a group gets a new instance.** Each level of nesting, from the top-level group down, follows the same three triggers, decided in one place (`StepGroupService.opensNewGroupInstance`):
+1. **None yet:** the group has no instance within its parent's. Only an event opens a `calendar-day` group's first instance.
+2. **New calendar day:** a `calendar-day` group's event on a later day, as above.
+3. **Entry step repeated:** an `entry-step` group's entry step, already completed in the latest cycle, as above.
 
-**Progression and checks.** A step or group that progressive instantiation or backfill adds to a group joins the instance around the completed step when there is one, and otherwise the group's latest cycle within its parent's latest cycle. It is deduplicated within that instance, so each visit gets its own. `detectOrderViolations`, `backfillMissingMandatorySteps`, the fan-in wait and a group's planned due date read a predecessor's rows by where it sits:
+Work that isn't an event (a step that follows a completed step, a backfilled step, a group that follows a step, a nested group opened with its parent) only ever brings the first trigger. Otherwise it joins the latest instance.
+
+**Which row an event completes.** For a step in a group, the instance is chosen first, under the lock below: from the top-level group down, each group's latest cycle within its parent's, or a new cycle when a trigger above says so. The event completes the step's open row in that instance, or adds a further completed row there. An earlier cycle's open row is never completed, whatever the event's clinical time. A step outside any group completes the open row whose due date is nearest the event's clinical time, or a new row is created. Both cases are in `StepInstanceService.stepInstanceForEvent`.
+
+**Progression and checks.** A step or group that progressive instantiation or backfill adds to a group joins the instance around the completed step when there is one, and otherwise the group's latest cycle within its parent's latest cycle. It is deduplicated within that instance, so each visit gets its own. The order-violation check, backfill, the fan-in wait and a group's planned due date read a predecessor's rows by where it sits (`StepInstanceScope`):
 - **It shares a group with the completed step:** only inside that shared instance, so one cycle never sees another's rows, and a missing predecessor is backfilled into it.
 - **It is in a group that shares none:** in that group's latest cycle, inside its parent's latest. A top-level treatment after a visit's prescription checks this visit's prescription, not an earlier visit's.
 - **It is outside every group:** across the enrollment, since it happens once per enrollment.
@@ -893,7 +906,11 @@ Backfill also follows what a step's enclosing groups wait on (`PlanDefinitionPar
 
 **Locking.** Every group decision runs under a `PESSIMISTIC_WRITE` lock on the enrollment's `protocol_instance` row (`ProtocolInstanceService.lockForStepGroups`), taken only when the protocol has groups. For an event for a step in a group it is taken before the instance and the row are chosen. Two events for one patient processed at once can't open the same instance twice, open two cycles for one day, or create the same step in it twice: the second, once it holds the lock, uses the rows the first created.
 
-**Where the code is.** `StepGroupService` decides which group instance an event or a piece of work goes to, opens instances, and reads a step's rows within the instance they count in (`rowsInScope`). `StepInstanceService` completes steps and drives progressive instantiation and backfill through it. Both create rows through `StepCreationService`, which inserts a step with its SLA schedule and first history entry.
+**Where the code is.**
+- `StepInstanceService` is the core flow. `stepInstanceForEvent` picks the step instance an event completes, asking `StepGroupService.groupInstanceForEvent` for the group instance first. `completeStepInstance` records the completion, then runs `OrderViolationDetector`, `ProgressiveInstantiationService` and `MandatoryStepBackfillService`, in that order.
+- `StepGroupService` decides which group instance an event or a piece of work goes to, and opens instances.
+- `StepInstanceScope` reads a step's rows within the instance they count in.
+- All of them create rows through `StepCreationService`, which inserts a step with its SLA schedule and first history entry.
 
 **Not built yet.** A group is never recorded as complete or closed: `completed_at` and `closed_at` stay null. The Protocol Service refuses at load a scheduled repeating group (`timing`), a deadline on a group (`tolerance-days`), an intelligence action on a group, and anything that follows a group. A match on a group's action id, from a definition loaded before those checks existed, is ignored: a group has no `StepMetadata`, so Tier 1 skips it.
 

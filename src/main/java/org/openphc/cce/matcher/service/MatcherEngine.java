@@ -47,7 +47,6 @@ public class MatcherEngine {
     private final ProtocolDefinitionService protocolDefinitionService;
     private final ProtocolInstanceService protocolInstanceService;
     private final StepInstanceService stepInstanceService;
-    private final StepCreationService stepCreationService;
     private final ParsedProtocolCache parsedProtocolCache;
     private final IntelligenceActionEvaluator intelligenceActionEvaluator;
     private final ClinicalEventTimeExtractor clinicalEventTimeExtractor;
@@ -67,7 +66,6 @@ public class MatcherEngine {
                             ProtocolDefinitionService protocolDefinitionService,
                             ProtocolInstanceService protocolInstanceService,
                             StepInstanceService stepInstanceService,
-                            StepCreationService stepCreationService,
                             ParsedProtocolCache parsedProtocolCache,
                             IntelligenceActionEvaluator intelligenceActionEvaluator,
                             ClinicalEventTimeExtractor clinicalEventTimeExtractor,
@@ -80,7 +78,6 @@ public class MatcherEngine {
         this.protocolDefinitionService = protocolDefinitionService;
         this.protocolInstanceService = protocolInstanceService;
         this.stepInstanceService = stepInstanceService;
-        this.stepCreationService = stepCreationService;
         this.parsedProtocolCache = parsedProtocolCache;
         this.intelligenceActionEvaluator = intelligenceActionEvaluator;
         this.clinicalEventTimeExtractor = clinicalEventTimeExtractor;
@@ -143,6 +140,8 @@ public class MatcherEngine {
         List<MatchedStep> finalMatches = matchingDurationTimer.record(() ->
                 performTwoTierMatching(resourceType, codes, eventData));
 
+        // Each match is a step, in one protocol, that the event completes. With none, the event's log row
+        // keeps the ZERO_MATCH it was recorded with.
         if (finalMatches != null && !finalMatches.isEmpty()) {
             for (MatchedStep match : finalMatches) {
                 processMatch(match, event, eventLog);
@@ -168,6 +167,8 @@ public class MatcherEngine {
         String protocolInstanceIdStr = event.getProtocolinstanceid();
 
         if (protocolInstanceIdStr == null || protocolInstanceIdStr.isBlank()) {
+            // An explicit match names the enrollment as well as the step: without it there is nothing to
+            // complete.
             log.warn("Explicit match requested but protocolInstanceId is missing: cloudeventsId={}",
                     event.getId());
             return;
@@ -178,12 +179,13 @@ public class MatcherEngine {
 
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         OffsetDateTime occurredAt = notAfter(resolveOccurredAt(event), now);
-        StepInstance step = stepForEvent(protocolInstance, stepActionId, now, occurredAt);
+        StepInstance stepInstance = stepInstanceService.stepInstanceForEvent(protocolInstance, stepActionId, now,
+                occurredAt);
 
-        stepInstanceService.completeStep(step, eventLog.getId(), event.getSource(), occurredAt);
+        stepInstanceService.completeStepInstance(stepInstance, eventLog.getId(), event.getSource(), occurredAt);
 
         // Evaluate intelligence actions after step completion
-        intelligenceActionEvaluator.evaluateOnCompletion(step, event.getData());
+        intelligenceActionEvaluator.evaluateOnCompletion(stepInstance, event.getData());
 
         eventLogService.updateStatus(eventLog, ProcessingStatus.MATCHED);
         eventsMatchedCounter.increment();
@@ -204,7 +206,7 @@ public class MatcherEngine {
             PlanDefinitionParser.StepMetadata stepMetadata =
                     stepMetadata(match.protocolDefinitionId(), match.stepActionId());
             if (stepMetadata == null) {
-                continue;
+                continue; // the protocol doesn't declare the matched action: nothing to check or complete
             }
 
             boolean hasCondition = stepMetadata.triggers().stream()
@@ -227,6 +229,10 @@ public class MatcherEngine {
         return finalMatches;
     }
 
+    /**
+     * Whether any of the step's trigger conditions holds for the event: one is enough. A trigger with no
+     * condition is skipped; the caller asks only when at least one trigger has a condition.
+     */
     private boolean evaluateTriggerConditions(PlanDefinitionParser.StepMetadata stepMetadata,
                                                JsonNode eventData) {
         for (PlanDefinitionParser.TriggerInfo trigger : stepMetadata.triggers()) {
@@ -258,15 +264,13 @@ public class MatcherEngine {
         ProtocolInstance protocolInstance = protocolInstanceService.enrollPatient(
                 patientId, protocolDef, occurredAt);
 
-        String stepActionId = match.stepActionId();
+        StepInstance stepInstance = stepInstanceService.stepInstanceForEvent(protocolInstance, match.stepActionId(),
+                now, occurredAt);
 
-        StepInstance step = stepForEvent(protocolInstance, stepActionId, now, occurredAt);
-
-        stepInstanceService.completeStep(step, eventLog.getId(), event.getSource(), occurredAt);
+        stepInstanceService.completeStepInstance(stepInstance, eventLog.getId(), event.getSource(), occurredAt);
 
         // Evaluate intelligence actions after step completion
-        intelligenceActionEvaluator.evaluateOnCompletion(step, event.getData());
-
+        intelligenceActionEvaluator.evaluateOnCompletion(stepInstance, event.getData());
     }
 
     /**
@@ -283,6 +287,7 @@ public class MatcherEngine {
      * schedules out.
      */
     private OffsetDateTime resolveOccurredAt(CloudEventMessage event) {
+        // 1. The clinical time in a FHIR payload, when it has one.
         if (isFhir(event)) {
             ResourceType resourceType = resourceTypeDetector.detect(event.getData());
             OffsetDateTime clinical = clinicalEventTimeExtractor.extract(resourceType, event.getData());
@@ -290,6 +295,7 @@ public class MatcherEngine {
                 return clinical;
             }
         }
+        // 2. The envelope time, and 3. now() as a last resort.
         return event.getTime() != null ? event.getTime() : OffsetDateTime.now(ZoneOffset.UTC);
     }
 
@@ -305,8 +311,8 @@ public class MatcherEngine {
     /**
      * The occurrence time, or {@code now} when it is later: work cannot have happened in the future.
      *
-     * <p>{@code now} must be the same instant the event's {@link #createInitialStep} uses as the new
-     * step's due date — one reading of the clock per event. A source whose clock runs ahead, or that
+     * <p>{@code now} must be the same instant {@link StepInstanceService#stepInstanceForEvent} uses as the
+     * due date of a step instance the event creates — one reading of the clock per event. A source whose clock runs ahead, or that
      * labels local time as UTC, sends a future occurrence time. Clamped to a second reading taken a
      * moment after the due date, the completion of the very step the event created landed microseconds
      * after its deadline: no {@code MET_CONDITION_REACHED} row, and an {@code OVERDUE} deviation for
@@ -314,48 +320,6 @@ public class MatcherEngine {
      */
     private static OffsetDateTime notAfter(OffsetDateTime occurredAt, OffsetDateTime now) {
         return occurredAt.isAfter(now) ? now : occurredAt;
-    }
-
-    /**
-     * The row an event for {@code stepActionId} completes, created when none is awaiting it. A step the event
-     * itself brings into being is due at {@code now}, the event's single clock reading.
-     *
-     * <p>A step in a step group is left to {@link StepInstanceService#findOrCreateGroupedStep}, which
-     * first decides, under the enrollment's lock, which instance of the group the event goes to.
-     * Outside any group, the open row with the nearest due date is completed, or a new one created.
-     */
-    private StepInstance stepForEvent(ProtocolInstance protocolInstance, String stepActionId,
-                                      OffsetDateTime now, OffsetDateTime occurredAt) {
-        PlanDefinitionParser.StepMetadata stepMetadata = parsedProtocolCache
-                .get(protocolInstance.getProtocolDefinition().getId(),
-                        () -> protocolInstance.getProtocolDefinition().getDefinition().toString())
-                .step(stepActionId);
-
-        if (stepMetadata != null && stepMetadata.groupId() != null) {
-            return stepInstanceService.findOrCreateGroupedStep(protocolInstance, stepMetadata, now, occurredAt);
-        }
-
-        StepInstance actionableStep =
-                stepInstanceService.findActionableStep(protocolInstance.getId(), stepActionId, occurredAt);
-        if (actionableStep != null) {
-            return actionableStep;
-        }
-        if (stepMetadata == null) {
-            // An explicit match can name an action the protocol doesn't declare: a bare row, with no deadline.
-            return stepCreationService.createStep(protocolInstance, stepActionId, 0, now, null, null);
-        }
-        return createInitialStep(protocolInstance, stepMetadata, now);
-    }
-
-    /** A step outside any group that the event itself brings into being: due at {@code now}. */
-    private StepInstance createInitialStep(ProtocolInstance protocolInstance,
-                                           PlanDefinitionParser.StepMetadata stepMetadata, OffsetDateTime now) {
-        // tolerance-days is the single grace window: missedDate = dueDate + tolerance.
-        OffsetDateTime missedDate = stepMetadata.toleranceDays() != null
-                ? now.plusDays(stepMetadata.toleranceDays())
-                : null;
-        return stepCreationService.createStep(protocolInstance, stepMetadata.id(), 0,
-                now, missedDate, stepMetadata.requiredBehavior());
     }
 
     /** A matched action's metadata, or null when the protocol declares no such action. */

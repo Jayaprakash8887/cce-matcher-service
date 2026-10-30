@@ -8,8 +8,6 @@ import org.openphc.cce.common.entity.StepGroupInstance;
 import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.enums.ProtocolInstanceStatus;
 import org.openphc.cce.common.enums.StepStatus;
-import org.openphc.cce.common.fhir.ParsedProtocolCache;
-import org.openphc.cce.common.fhir.PlanDefinitionParser;
 import org.openphc.cce.common.repository.ProtocolInstanceRepository;
 import org.openphc.cce.common.repository.StepGroupInstanceRepository;
 import org.openphc.cce.common.repository.StepInstanceRepository;
@@ -52,9 +50,6 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
 
     @Autowired
     private ProtocolInstanceRepository protocolInstanceRepository;
-
-    @Autowired
-    private ParsedProtocolCache parsedProtocolCache;
 
     @Autowired
     private PlatformTransactionManager transactionManager;
@@ -108,9 +103,8 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
                     .<Future<?>>map(actionId -> pool.submit(() -> tx.executeWithoutResult(status -> {
                         ProtocolInstance enrollment = protocolInstanceRepository.findById(enrollmentId).orElseThrow();
                         await(bothStarted);
-                        StepInstance row = stepInstanceService.findOrCreateGroupedStep(
-                                enrollment, metadata(actionId), at, at);
-                        stepInstanceService.completeStep(row, UUID.randomUUID(), "test", at);
+                        StepInstance row = stepInstanceService.stepInstanceForEvent(enrollment, actionId, at, at);
+                        stepInstanceService.completeStepInstance(row, UUID.randomUUID(), "test", at);
                     })))
                     .toList();
             for (Future<?> event : events) {
@@ -119,12 +113,6 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
         } finally {
             pool.shutdownNow();
         }
-    }
-
-    private PlanDefinitionParser.StepMetadata metadata(String actionId) {
-        return parsedProtocolCache
-                .get(protocolDefinition.getId(), () -> protocolDefinition.getDefinition().toString())
-                .step(actionId);
     }
 
     private static void await(CyclicBarrier barrier) {

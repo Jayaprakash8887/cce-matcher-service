@@ -109,17 +109,17 @@ sequenceDiagram
                     ProtoInst-->>Engine: protocolInstance
 
                     Engine->>Engine: resolveOccurredAt(event)<br/>(clinical time from payload → envelope time → now)
-                    Engine->>StepInst: findActionableStep(protocolInstanceId, actionId)
-                    alt No actionable step exists yet
-                        Engine->>StepInst: createStep(protocol, actionId, 0, now, ...)
-                        StepInst->>DB: INSERT INTO step_instance (step_status=NOT_STARTED, sla_status=NULL)
+                    Engine->>StepInst: stepInstanceForEvent(protocolInstance, actionId, now, occurredAt)
+                    Note over StepInst: In a group: the group instance first (StepGroupService),<br/>then the step's open instance there. Outside any group:<br/>the open instance whose due date is nearest occurredAt
+                    alt No open step instance
+                        StepInst->>DB: INSERT INTO step_instance (step_status=NOT_STARTED, sla_status=NULL, due now)
                     end
 
-                    Engine->>StepInst: completeStep(step, eventLogId, source, occurredAt)
+                    Engine->>StepInst: completeStepInstance(stepInstance, eventLogId, source, occurredAt)
                     Note over StepInst: Single call — internally sets completed_at (clinical time,<br/>clamped to now), detects order violations, runs progressive<br/>instantiation of mandatory dependents (see §9), backfills<br/>unrecorded mandatory predecessors (see §9). Does NOT set<br/>sla_status — timeliness is the Step SLA Service's call
                     StepInst->>DB: UPDATE step_instance SET step_status=COMPLETED,<br/>completed_at, matched_event_id
 
-                    Engine->>Intel: evaluateOnCompletion(step, eventPayload)
+                    Engine->>Intel: evaluateOnCompletion(stepInstance, eventPayload)
 
                 end
                 Engine->>EventLog: updateStatus(eventLog, MATCHED)
@@ -213,7 +213,7 @@ sequenceDiagram
 
     Matcher->>DB: createStep + INSERT step_sla_state_transition (same tx)
     Note over Matcher,DB: One row per deadline present — a step with no<br/>tolerance-days gets no MISSED row, an optional step gets none at all
-    Matcher->>DB: completeStep + INSERT MET_CONDITION_REACHED (same tx)
+    Matcher->>DB: completeStepInstance + INSERT MET_CONDITION_REACHED (same tx)
     Note over Matcher,DB: Only when completed_at beat the step's due_date;<br/>process_by = completed_at, so the row is due at once
 
     loop Polling interval
@@ -255,7 +255,7 @@ flowchart TD
     K --> L["Calculate repeatIndex"]
     L --> N["Create StepInstance — step_status = NOT_STARTED,<br/>sla_status = NULL (nothing judged yet)<br/>+ schedule its SLA transition rows (see §3)"]
 
-    J --> P["completeStep()"]
+    J --> P["completeStepInstance()"]
     N --> P
 
     P --> SS["step_status = COMPLETED<br/>(the event arrived — always set)"]
@@ -291,7 +291,7 @@ intelligence evaluation for them.
 
 ```mermaid
 flowchart TD
-    T2["completeStep(): a must-predecessor is still outstanding<br/>(detectOrderViolations)"]
+    T2["completeStepInstance(): a must-predecessor is still outstanding<br/>(OrderViolationDetector)"]
     T2 -->|"type=ORDER_VIOLATION<br/>+ incompletePrerequisites metadata"| RD
 
     RD["DeviationRecorder.recordDeviation()"]
@@ -447,27 +447,29 @@ All steps (including those originally nested in `action.action[]`) are treated a
 ```mermaid
 flowchart TD
     MATCH["Tier 1/2 match returns actionId"] --> NORMAL["Standard step processing<br/>(Section 1, Step 6)"]
-    NORMAL --> COMPLETE["completeStep(step)"]
-    COMPLETE --> DEPS["createDependentSteps()<br/>(find steps declaring this step id as their prerequisite)"]
+    NORMAL --> COMPLETE["completeStepInstance(stepInstance)"]
+    COMPLETE --> DEPS["ProgressiveInstantiationService.instantiateDependents()<br/>(find steps declaring this step id as their prerequisite)"]
     DEPS --> CREATED["Create dependent steps (NOT_STARTED, sla NULL)"]
-    CREATED --> BACKFILL["backfillMissingMandatorySteps()<br/>(see 'Unrecorded Mandatory Predecessor Backfill' below)"]
+    CREATED --> BACKFILL["MandatoryStepBackfillService.backfillMissingMandatorySteps()<br/>(see 'Unrecorded Mandatory Predecessor Backfill' below)"]
 ```
 
 ### Dependent Step Creation on Completion
 
-`relatedAction` is a **relative** pointer — a step states how it sits against another, from either end (`after-*` or `before-*`) — so the forward direction needed here comes from the normalized graph built by `PlanDefinitionParser.buildDependencyGraph()`. When any step completes, `createDependentSteps()` looks up the steps that depend on it and creates them with due dates taken from the offset on the edge between them.
+`relatedAction` is a **relative** pointer — a step states how it sits against another, from either end (`after-*` or `before-*`) — so the forward direction needed here comes from the normalized graph built by `PlanDefinitionParser.buildDependencyGraph()`. When any step completes, progressive instantiation (`ProgressiveInstantiationService.instantiateDependents()`) looks up the steps that depend on it and creates them with due dates taken from the offset on the edge between them, then opens the mandatory groups that follow it.
 
 ```mermaid
 flowchart TD
-    START["createDependentSteps(completedStep, graph)"] --> FIND["graph.successorsOf(completedStep):<br/>steps ordered after it by either an after-* edge<br/>of their own or a before-* edge on the completed step"]
+    START["instantiateDependents(enrollment, completedStepInstance)"] --> FIND["graph.successorsOf(completed step):<br/>steps ordered after it by either an after-* edge<br/>of their own or a before-* edge on the completed step"]
     FIND --> LOOP{"For each dependent step"}
-    LOOP --> DEDUP{"An instance for this step<br/>already exists?"}
-    DEDUP -->|"Yes"| SKIP["Skip — avoid duplicate<br/>(already created reactively via its own<br/>trigger, or by a redelivered predecessor)"]
-    DEDUP -->|"No"| MUST{"dependent step's<br/>requiredBehavior == must?"}
+    LOOP --> MUST{"dependent step's<br/>requiredBehavior == must?"}
     MUST -->|"No (could / unspecified)"| SKIP2["Skip pre-creation — a dangling row could later go<br/>MISSED even though its event never arrives;<br/>created on the fly if its own trigger fires"]
     MUST -->|"Yes"| FANIN{"Any OTHER prerequisite still outstanding<br/>(NOT_STARTED + sla NULL/OVERDUE)?"}
     FANIN -->|"Yes"| SKIP3["Defer — that prerequisite's own completion<br/>re-runs this, so the due date anchors to<br/>the LAST prerequisite to finish"]
-    FANIN -->|"No"| CALC["Calculate due date from the dependent step's own<br/>offset + relationship<br/>(after-end → completedAt [clinical time], after-start → dueDate)"]
+    FANIN -->|"No"| GROUP{"In a group: a group instance it can join?<br/>(StepGroupService.groupInstanceForWork)"}
+    GROUP -->|"No — a calendar-day group<br/>with no cycle yet"| SKIP4["Skip — only an event of its own<br/>opens a calendar-day cycle"]
+    GROUP -->|"Yes, or outside any group"| DEDUP{"A step instance for this step already<br/>exists where it would go?"}
+    DEDUP -->|"Yes"| SKIP["Skip — avoid duplicate<br/>(created reactively via its own trigger,<br/>by a redelivered predecessor, or by its group opening)"]
+    DEDUP -->|"No"| CALC["Calculate due date from the dependent step's own<br/>offset + relationship<br/>(after-end → completedAt [clinical time], after-start → dueDate)"]
     CALC --> RECURRING{"TimingInfo.count > 1?"}
 
     RECURRING -->|"Yes"| MULTI["Create N recurring instances with staggered due dates"]
@@ -478,17 +480,19 @@ flowchart TD
     SKIP --> NEXT
     SKIP2 --> NEXT
     SKIP3 --> NEXT
+    SKIP4 --> NEXT
     NEXT --> LOOP
-    LOOP -->|"Done"| END["Return"]
+    LOOP -->|"Done"| GROUPS["Open the mandatory groups that follow it<br/>(StepGroupService.openFollowingGroup)"]
+    GROUPS --> END["Return"]
 ```
 
-### Unrecorded Mandatory Predecessor Backfill (backfillMissingMandatorySteps)
+### Unrecorded Mandatory Predecessor Backfill (MandatoryStepBackfillService)
 
 Progressive instantiation only works *forward*, so a step created reactively from its own trigger leaves the mandatory steps that should have preceded it with no `step_instance` row — invisible both in the journey view ("not started") and to the SLA evaluator, having no scheduled transition. After every completion, mandatory predecessors of the observed progress that have no row are materialized as `NOT_STARTED` with no SLA judgement. See `architecture-overview.md` §6.1 for the full rationale.
 
 ```mermaid
 flowchart TD
-    START["backfillMissingMandatorySteps(completedStep, allSteps)"] --> OBSERVED["Collect observed step ids<br/>(all step_instance rows of this protocol instance)"]
+    START["backfillMissingMandatorySteps(enrollment, completedStepInstance)"] --> OBSERVED["Collect observed step ids<br/>(all step_instance rows of this protocol instance)"]
     OBSERVED --> PRED["computeMustPredecessorSteps():<br/>transitive relatedAction ancestors of every observed step,<br/>restricted to requiredBehavior == must"]
     PRED --> MISSING{"Any with no<br/>step_instance row?"}
     MISSING -->|"No"| DONE["Return — nothing to backfill"]

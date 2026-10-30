@@ -21,9 +21,9 @@ import java.util.List;
 /**
  * Inserting {@code step_instance} rows, with their SLA schedule and first history entry.
  *
- * <p>Deciding which steps to create is left to the callers: {@link StepInstanceService} as steps complete,
- * {@link StepGroupService} as group instances open, and {@link MatcherEngine} for a step an event brings
- * into being.
+ * <p>Deciding which steps to create is left to the callers: {@link ProgressiveInstantiationService} and
+ * {@link MandatoryStepBackfillService} as steps complete, {@link StepGroupService} as group instances open,
+ * and {@link StepInstanceService} for a step an event brings into being.
  */
 @Service
 @Transactional
@@ -70,7 +70,7 @@ public class StepCreationService {
                                    int repeatIndex, OffsetDateTime dueDate,
                                    OffsetDateTime missedDate, String requiredBehavior,
                                    StepGroupInstance stepGroupInstance) {
-        StepInstance step = StepInstance.builder()
+        StepInstance stepInstance = StepInstance.builder()
                 .protocolInstance(protocolInstance)
                 .actionId(stepActionId)
                 .stepGroupInstance(stepGroupInstance)
@@ -86,17 +86,17 @@ public class StepCreationService {
                 .requiredBehavior(requiredBehavior)
                 .build();
 
-        step = stepInstanceRepository.save(step);
+        stepInstance = stepInstanceRepository.save(stepInstance);
 
-        slaScheduleService.schedule(step, dueDate, missedDate);
+        slaScheduleService.schedule(stepInstance, dueDate, missedDate);
 
         // Capture the initial NOT_STARTED status in append-only history.
-        stateTransitionHistoryWriter.recordStepInstanceTransition(step, step.getCreatedAt());
+        stateTransitionHistoryWriter.recordStepInstanceTransition(stepInstance, stepInstance.getCreatedAt());
 
         log.info("Created step instance: actionId={}, repeatIndex={}, instanceId={}, stepId={}, due={}, missed={}",
-                stepActionId, repeatIndex, protocolInstance.getId(), step.getId(), dueDate, missedDate);
+                stepActionId, repeatIndex, protocolInstance.getId(), stepInstance.getId(), dueDate, missedDate);
 
-        return step;
+        return stepInstance;
     }
 
     /**
@@ -108,19 +108,20 @@ public class StepCreationService {
      * instance whose planned due date is not known yet.
      */
     public List<StepInstance> createStepRows(ProtocolInstance protocolInstance,
-                                             PlanDefinitionParser.StepMetadata step,
+                                             PlanDefinitionParser.StepMetadata stepMetadata,
                                              OffsetDateTime dueDate, StepGroupInstance stepGroupInstance) {
         int repeatCount = 1;
         BigDecimal repeatPeriod = null;
         String repeatPeriodUnit = null;
-        PlanDefinitionParser.TimingInfo timing = step.timing();
+        PlanDefinitionParser.TimingInfo timing = stepMetadata.timing();
+        // Repeats on its own timing only when there is a due date to count the repeats from.
         if (dueDate != null && timing != null && timing.count() != null && timing.count() > 1) {
             repeatCount = timing.count();
             repeatPeriod = timing.period();
             repeatPeriodUnit = timing.periodUnit();
         }
 
-        List<StepInstance> createdRows = new ArrayList<>(repeatCount);
+        List<StepInstance> createdStepInstances = new ArrayList<>(repeatCount);
         for (int i = 0; i < repeatCount; i++) {
             OffsetDateTime instanceDueDate = dueDate;
             if (i > 0 && repeatPeriod != null && repeatPeriodUnit != null) {
@@ -128,14 +129,14 @@ public class StepCreationService {
             }
 
             OffsetDateTime instanceMissedDate = null;
-            if (instanceDueDate != null && step.toleranceDays() != null) {
-                instanceMissedDate = instanceDueDate.plusDays(step.toleranceDays());
+            if (instanceDueDate != null && stepMetadata.toleranceDays() != null) {
+                instanceMissedDate = instanceDueDate.plusDays(stepMetadata.toleranceDays());
             }
 
-            createdRows.add(createStep(protocolInstance, step.id(), i, instanceDueDate,
-                    instanceMissedDate, step.requiredBehavior(), stepGroupInstance));
+            createdStepInstances.add(createStep(protocolInstance, stepMetadata.id(), i, instanceDueDate,
+                    instanceMissedDate, stepMetadata.requiredBehavior(), stepGroupInstance));
         }
-        return createdRows;
+        return createdStepInstances;
     }
 
     /** {@code baseTime} moved by {@code edge}'s offset; {@code baseTime} itself when the edge has none. */

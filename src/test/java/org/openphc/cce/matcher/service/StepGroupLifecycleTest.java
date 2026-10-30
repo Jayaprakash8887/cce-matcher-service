@@ -58,7 +58,7 @@ import static org.mockito.Mockito.*;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class StepGroupLifecycleTest {
 
-    // In the past: completeStep clamps a future clinical time to now.
+    // In the past: completeStepInstance clamps a future clinical time to now.
     private static final OffsetDateTime T0 = OffsetDateTime.of(2026, 1, 10, 9, 0, 0, 0, ZoneOffset.UTC);
 
     // UTC+2, so a day boundary in it is not midnight UTC.
@@ -93,11 +93,16 @@ class StepGroupLifecycleTest {
     void setUp() {
         stepCreationService = new StepCreationService(stepInstanceRepository, slaScheduleService,
                 stateTransitionHistoryWriter);
-        StepGroupService groupService = new StepGroupService(groupInstanceRepository, stepCreationService, KIGALI);
-        service = new StepInstanceService(stepInstanceRepository, parsedProtocolCache, deviationRecorder,
-                intelligenceActionEvaluator, stateTransitionHistoryWriter, slaScheduleService,
-                slaThresholdReader, groupService, stepCreationService,
-                new ProtocolInstanceService(protocolInstanceRepository, stateTransitionHistoryWriter));
+        StepInstanceScope stepInstanceScope = new StepInstanceScope(groupInstanceRepository);
+        StepGroupService groupService =
+                new StepGroupService(groupInstanceRepository, stepCreationService, stepInstanceScope, KIGALI);
+        service = new StepInstanceService(stepInstanceRepository, parsedProtocolCache, stateTransitionHistoryWriter,
+                slaScheduleService, slaThresholdReader,
+                new ProtocolInstanceService(protocolInstanceRepository, stateTransitionHistoryWriter),
+                groupService, stepCreationService,
+                new OrderViolationDetector(stepInstanceScope, deviationRecorder, intelligenceActionEvaluator),
+                new ProgressiveInstantiationService(groupService, stepInstanceScope, stepCreationService),
+                new MandatoryStepBackfillService(groupService, stepInstanceScope, stepCreationService));
 
         enrollment = ProtocolInstance.builder()
                 .id(UUID.randomUUID())
@@ -130,15 +135,6 @@ class StepGroupLifecycleTest {
                         .filter(r -> r.getActionId().equals(i.getArgument(1))
                                 && r.getStepStatus() == i.getArgument(2))
                         .toList());
-        when(stepInstanceRepository.existsByProtocolInstanceIdAndActionId(any(), any()))
-                .thenAnswer(i -> stepRows.stream().anyMatch(r -> r.getActionId().equals(i.getArgument(1))));
-        when(stepInstanceRepository.existsByStepGroupInstanceIdAndActionId(any(), any()))
-                .thenAnswer(i -> stepRows.stream()
-                        .anyMatch(r -> inGroupInstance(r, i.getArgument(0)) && r.getActionId().equals(i.getArgument(1))));
-    }
-
-    private static boolean inGroupInstance(StepInstance row, UUID groupInstanceId) {
-        return row.getStepGroupInstance() != null && groupInstanceId.equals(row.getStepGroupInstance().getId());
     }
 
     private void stubGroupRows() {
@@ -214,18 +210,13 @@ class StepGroupLifecycleTest {
     /** What {@code MatcherEngine.processMatch} does with a matched event, at clinical time {@code at}. */
     private StepInstance record(String actionId, OffsetDateTime at) {
         StepInstance row = rowFor(actionId, at);
-        service.completeStep(row, UUID.randomUUID(), "test", at);
+        service.completeStepInstance(row, UUID.randomUUID(), "test", at);
         return row;
     }
 
     /** The row {@code MatcherEngine} picks for an event at clinical time {@code at}, created if need be. */
     private StepInstance rowFor(String actionId, OffsetDateTime at) {
-        PlanDefinitionParser.StepMetadata metadata = protocol.step(actionId);
-        if (metadata.groupId() != null) {
-            return service.findOrCreateGroupedStep(enrollment, metadata, at, at);
-        }
-        StepInstance row = service.findActionableStep(enrollment.getId(), actionId, at);
-        return row != null ? row : stepCreationService.createStep(enrollment, actionId, 0, at, null, metadata.requiredBehavior());
+        return service.stepInstanceForEvent(enrollment, actionId, at, at);
     }
 
     private List<StepInstance> rowsFor(String actionId) {
@@ -773,8 +764,8 @@ class StepGroupLifecycleTest {
             StepInstance january = stepCreationService.createStep(enrollment, "vitals", 0, T0, null, "must");
             StepInstance april = stepCreationService.createStep(enrollment, "vitals", 1, T0.plusMonths(3), null, "must");
 
-            assertSame(april, service.findActionableStep(enrollment.getId(), "vitals", T0.plusMonths(3).plusDays(2)));
-            assertSame(january, service.findActionableStep(enrollment.getId(), "vitals", T0.plusDays(10)));
+            assertSame(april, rowFor("vitals", T0.plusMonths(3).plusDays(2)));
+            assertSame(january, rowFor("vitals", T0.plusDays(10)));
         }
 
         @Test
@@ -782,7 +773,7 @@ class StepGroupLifecycleTest {
             StepInstance older = stepCreationService.createStep(enrollment, "vitals", 0, null, null, "must");
             stepCreationService.createStep(enrollment, "vitals", 1, null, null, "must");
 
-            assertSame(older, service.findActionableStep(enrollment.getId(), "vitals", T0));
+            assertSame(older, rowFor("vitals", T0));
         }
 
         @Test
@@ -790,7 +781,7 @@ class StepGroupLifecycleTest {
             StepInstance undated = stepCreationService.createStep(enrollment, "vitals", 0, null, null, "must");
             StepInstance dated = stepCreationService.createStep(enrollment, "vitals", 1, T0, null, "must");
 
-            assertSame(dated, service.findActionableStep(enrollment.getId(), "vitals", T0.plusYears(1)));
+            assertSame(dated, rowFor("vitals", T0.plusYears(1)));
             assertNotNull(undated.getId());
         }
     }
@@ -826,11 +817,11 @@ class StepGroupLifecycleTest {
             stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
             StepInstance examination = stepCreationService.createStep(
                     enrollment, "examination", 0, T0.plusDays(14), null, "must", current);
-            service.completeStep(examination, UUID.randomUUID(), "test", T0.plusDays(14));
+            service.completeStepInstance(examination, UUID.randomUUID(), "test", T0.plusDays(14));
 
             StepInstance prescription = rowsFor("prescription").get(0);
             assertEquals(current.getId(), groupInstanceIdOf(prescription));
-            service.completeStep(prescription, UUID.randomUUID(), "test", T0.plusDays(14).plusMinutes(30));
+            service.completeStepInstance(prescription, UUID.randomUUID(), "test", T0.plusDays(14).plusMinutes(30));
 
             verify(deviationRecorder, never()).recordDeviation(any(), any(), any());
         }
@@ -849,7 +840,7 @@ class StepGroupLifecycleTest {
             StepInstance undone = stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
             StepInstance latest = stepCreationService.createStep(
                     enrollment, "examination", 0, T0.plusDays(14), null, "must", current);
-            service.completeStep(latest, UUID.randomUUID(), "test", T0.plusDays(14));
+            service.completeStepInstance(latest, UUID.randomUUID(), "test", T0.plusDays(14));
 
             StepInstance row = rowFor("examination", T0.plusDays(1));
 
@@ -861,12 +852,12 @@ class StepGroupLifecycleTest {
         @Test
         void aPredecessorMissingFromThisCycleIsBackfilledIntoIt_evenThoughAnEarlierCycleHasOne() {
             StepInstance done = stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
-            service.completeStep(done, UUID.randomUUID(), "test", T0);
+            service.completeStepInstance(done, UUID.randomUUID(), "test", T0);
             int examinationsBefore = rowsFor("examination").size();
 
             StepInstance prescription = stepCreationService.createStep(
                     enrollment, "prescription", 0, T0.plusDays(14), null, "must", current);
-            service.completeStep(prescription, UUID.randomUUID(), "test", T0.plusDays(14));
+            service.completeStepInstance(prescription, UUID.randomUUID(), "test", T0.plusDays(14));
 
             List<StepInstance> examinations = rowsFor("examination");
             assertEquals(examinationsBefore + 1, examinations.size());
