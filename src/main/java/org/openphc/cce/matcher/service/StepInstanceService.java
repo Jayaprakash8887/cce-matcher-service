@@ -259,10 +259,10 @@ public class StepInstanceService {
 
     /**
      * The enrollment as the work for one event sees it: locked first when its protocol has step groups
-     * (see {@link ProtocolInstanceService#lockForStepGroups}), then its step instances read once.
+     * (see {@link ProtocolInstanceService#lockProtocolInstance}), then its step instances read once.
      */
     private Enrollment lockAndLoad(ProtocolInstance protocolInstance, ParsedProtocolCache.ParsedProtocol protocol) {
-        protocolInstanceService.lockForStepGroups(protocolInstance, protocol);
+        protocolInstanceService.lockProtocolInstance(protocolInstance, protocol);
         return new Enrollment(protocolInstance, protocol,
                 new ArrayList<>(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId())));
     }

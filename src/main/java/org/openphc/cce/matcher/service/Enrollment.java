@@ -5,13 +5,13 @@ import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
 
+import java.util.ArrayList;
 import java.util.Collection;
-import java.util.LinkedList;
 import java.util.List;
 
 /**
  * An enrollment as the work for one event sees it: the protocol instance, its parsed protocol, and its
- * step instances, read once under the enrollment's lock ({@link ProtocolInstanceService#lockForStepGroups}).
+ * step instances, read once under the enrollment's lock ({@link ProtocolInstanceService#lockProtocolInstance}).
  *
  * <p>{@code stepInstances} is mutable by design: work that creates step instances adds them here, so later
  * work in the same transaction sees them. Progressive instantiation relies on that for a step waiting on
@@ -27,12 +27,15 @@ record Enrollment(ProtocolInstance protocolInstance,
         return protocol.step(stepActionId);
     }
 
-    /** {@code groupId}'s enclosing groups and the group itself, from the top-level group down. */
-    List<PlanDefinitionParser.GroupMetadata> groupsFromTopDown(String groupId) {
-        LinkedList<PlanDefinitionParser.GroupMetadata> groups = new LinkedList<>();
+    /**
+     * {@code groupId} and the groups around it, found by following each group's parent: the group itself
+     * first, the top-level group last.
+     */
+    List<PlanDefinitionParser.GroupMetadata> groupsFromInnermostOut(String groupId) {
+        List<PlanDefinitionParser.GroupMetadata> groups = new ArrayList<>();
         for (String enclosingGroupId = groupId; enclosingGroupId != null;
              enclosingGroupId = protocol.group(enclosingGroupId).parentGroupId()) {
-            groups.addFirst(protocol.group(enclosingGroupId));
+            groups.add(protocol.group(enclosingGroupId));
         }
         return groups;
     }

@@ -23,7 +23,7 @@ import java.util.Optional;
  * with the steps it holds from the start.
  *
  * <p>Every method here expects the caller to hold the enrollment's lock
- * ({@link ProtocolInstanceService#lockForStepGroups}) and to have read the enrollment's step instances
+ * ({@link ProtocolInstanceService#lockProtocolInstance}) and to have read the enrollment's step instances
  * under it (see {@link Enrollment}). Opening an instance adds the step instances it creates there.
  */
 @Service
@@ -58,11 +58,15 @@ public class StepGroupService {
     // ── Which instance ──
 
     /**
-     * The instance of {@code matchedStepMetadata}'s group that an event for it goes to. Each group, from the
-     * top-level one down to the step's own, gets the same rule within the instance just chosen for its
-     * parent: the event joins the group's latest instance, unless it opens a new one (see
-     * {@link #opensNewGroupInstance}). A new instance of an enclosing group opens its first members with
-     * it, so the groups inside it start afresh.
+     * The instance of {@code matchedStepMetadata}'s group that an event for it goes to, in two passes:
+     * <ol>
+     *   <li>Find the groups around the step: its own group, then each parent out to the top-level group.</li>
+     *   <li>Choose their instances from the outermost in. A group's instances live inside one instance of
+     *       its parent, so the parent's has to be chosen first; and a trigger on an outer group gives the
+     *       groups inside it fresh instances. A patient seen on day 1 comes back on day 15 for an
+     *       examination: the journey opens visit 2 for the new day, and the consultation starts again in
+     *       visit 2, rather than the examination going to visit 1's consultation.</li>
+     * </ol>
      *
      * @param occurredAt the event's clinical time: which day it falls on, and the opening time of any
      *                   instance it opens
@@ -70,28 +74,48 @@ public class StepGroupService {
     public StepGroupInstance groupInstanceForEvent(Enrollment enrollment,
                                                    PlanDefinitionParser.StepMetadata matchedStepMetadata,
                                                    OffsetDateTime occurredAt) {
-        Optional<MatchedEvent> matchedEvent = Optional.of(new MatchedEvent(matchedStepMetadata, occurredAt));
+        MatchedEvent matchedEvent = new MatchedEvent(matchedStepMetadata, occurredAt);
+
+        // 1. The groups around the step, from its own group out to the top level.
+        List<PlanDefinitionParser.GroupMetadata> groupsAroundStep =
+                enrollment.groupsFromInnermostOut(matchedStepMetadata.groupId());
+
+        // 2. Their instances, from the outermost in: each group's is chosen inside its parent's.
+        StepGroupInstance parentGroupInstance = null; // a top-level group's instances belong to the enrollment
         StepGroupInstance groupInstance = null;
-        for (PlanDefinitionParser.GroupMetadata groupMetadata
-                : enrollment.groupsFromTopDown(matchedStepMetadata.groupId())) {
-            StepGroupInstance parentGroupInstance = groupInstance;
-            Optional<StepGroupInstance> latestGroupInstance =
-                    latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance);
-            groupInstance = opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, matchedEvent)
-                    ? openNextGroupInstance(enrollment, groupMetadata, parentGroupInstance, latestGroupInstance,
-                            occurredAt, matchedStepMetadata.id())
-                    : latestGroupInstance.orElseThrow();
+        for (PlanDefinitionParser.GroupMetadata groupMetadata : groupsAroundStep.reversed()) {
+            groupInstance = groupInstanceForEventWithin(parentGroupInstance, enrollment, groupMetadata, matchedEvent);
+            parentGroupInstance = groupInstance; // the next group in is looked up inside this instance
         }
         return groupInstance;
     }
 
     /**
+     * The instance of one group, inside {@code parentGroupInstance}, that an event goes to: the group's
+     * latest instance, unless the event brings a trigger (see {@link #opensNewGroupInstance}).
+     */
+    private StepGroupInstance groupInstanceForEventWithin(StepGroupInstance parentGroupInstance,
+                                                          Enrollment enrollment,
+                                                          PlanDefinitionParser.GroupMetadata groupMetadata,
+                                                          MatchedEvent matchedEvent) {
+        Optional<StepGroupInstance> latestGroupInstance =
+                latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance);
+        boolean opensNewGroupInstance =
+                opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, Optional.of(matchedEvent));
+        if (opensNewGroupInstance) {
+            // A trigger fired: the event opens the group's next instance.
+            return openNextGroupInstance(enrollment, groupMetadata, parentGroupInstance, latestGroupInstance,
+                    matchedEvent.occurredAt(), matchedEvent.matchedStepMetadata().id());
+        }
+        // No trigger: the event joins the latest instance.
+        return latestGroupInstance.orElseThrow();
+    }
+
+    /**
      * The instance of {@code groupId} for work that isn't an event of the group's own: a step following a
-     * step in another group, a backfilled step, a group following a step. Each group, from the top-level
-     * one down to {@code groupId}, gets the same rule within the instance just chosen for its parent: the
-     * instance around {@code anchor} comes first, so the work stays in the cycle that gave rise to it;
-     * otherwise the group's latest instance, or a first one when it has none (see
-     * {@link #opensNewGroupInstance}).
+     * step in another group, a backfilled step, a group following a step. The same two passes as for an
+     * event (see {@link #groupInstanceForEvent}): find the groups from {@code groupId} outwards, then choose
+     * their instances from the outermost in.
      *
      * <p>Empty when a {@code calendar-day} group on the way has no instance yet: only an event for one of
      * its steps opens one, so the instance's day is the day the patient came.
@@ -101,28 +125,50 @@ public class StepGroupService {
      */
     public Optional<StepGroupInstance> groupInstanceForWork(Enrollment enrollment, String groupId,
                                                             StepGroupInstance anchor, OffsetDateTime openedAt) {
+        // 1. The groups around the work, from its own group out to the top level.
+        List<PlanDefinitionParser.GroupMetadata> groupsAroundWork = enrollment.groupsFromInnermostOut(groupId);
+
+        // 2. Their instances, from the outermost in: each group's is chosen inside its parent's.
+        StepGroupInstance parentGroupInstance = null; // a top-level group's instances belong to the enrollment
         StepGroupInstance groupInstance = null;
-        for (PlanDefinitionParser.GroupMetadata groupMetadata : enrollment.groupsFromTopDown(groupId)) {
-            StepGroupInstance parentGroupInstance = groupInstance;
-            StepGroupInstance groupInstanceAroundAnchor = enclosingGroupInstance(anchor, groupMetadata.id());
-            if (groupInstanceAroundAnchor != null) {
-                // The work stays in the cycle that gave rise to it, even when a later cycle has opened.
-                groupInstance = groupInstanceAroundAnchor;
-                continue;
-            }
-            Optional<StepGroupInstance> latestGroupInstance =
-                    latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance);
-            if (opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, Optional.empty())) {
-                // None yet: work opens the group's first instance.
-                groupInstance = openNextGroupInstance(enrollment, groupMetadata, parentGroupInstance,
-                        latestGroupInstance, openedAt, null);
-            } else if (latestGroupInstance.isPresent()) {
-                groupInstance = latestGroupInstance.get();
-            } else {
+        for (PlanDefinitionParser.GroupMetadata groupMetadata : groupsAroundWork.reversed()) {
+            Optional<StepGroupInstance> groupInstanceForWork =
+                    groupInstanceForWorkWithin(parentGroupInstance, enrollment, groupMetadata, anchor, openedAt);
+            if (groupInstanceForWork.isEmpty()) {
                 return Optional.empty(); // a calendar-day group with no instance yet
             }
+            groupInstance = groupInstanceForWork.get();
+            parentGroupInstance = groupInstance; // the next group in is looked up inside this instance
         }
         return Optional.of(groupInstance);
+    }
+
+    /**
+     * The instance of one group, inside {@code parentGroupInstance}, that work goes to: the instance around
+     * {@code anchor}, else the group's latest, else a first one (see {@link #opensNewGroupInstance}). Empty
+     * for a {@code calendar-day} group with no instance yet.
+     */
+    private Optional<StepGroupInstance> groupInstanceForWorkWithin(StepGroupInstance parentGroupInstance,
+                                                                   Enrollment enrollment,
+                                                                   PlanDefinitionParser.GroupMetadata groupMetadata,
+                                                                   StepGroupInstance anchor,
+                                                                   OffsetDateTime openedAt) {
+        StepGroupInstance groupInstanceAroundAnchor = enclosingGroupInstance(anchor, groupMetadata.id());
+        if (groupInstanceAroundAnchor != null) {
+            // The work stays in the cycle that gave rise to it, even when a later cycle has opened.
+            return Optional.of(groupInstanceAroundAnchor);
+        }
+        Optional<StepGroupInstance> latestGroupInstance =
+                latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance);
+        boolean opensNewGroupInstance =
+                opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, Optional.empty());
+        if (opensNewGroupInstance) {
+            // None yet: work opens the group's first instance.
+            return Optional.of(openNextGroupInstance(enrollment, groupMetadata, parentGroupInstance,
+                    latestGroupInstance, openedAt, null));
+        }
+        // An instance exists: work joins the latest. Empty for a calendar-day group with none yet.
+        return latestGroupInstance;
     }
 
     /**

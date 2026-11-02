@@ -75,7 +75,7 @@ public class ProtocolInstanceService {
      * group instance, or create the same step in it twice. The row itself is not changed: the lock is a
      * mutex for the enrollment's group work. A protocol without groups pays nothing.
      */
-    public void lockForStepGroups(ProtocolInstance protocolInstance, ParsedProtocolCache.ParsedProtocol protocol) {
+    public void lockProtocolInstance(ProtocolInstance protocolInstance, ParsedProtocolCache.ParsedProtocol protocol) {
         if (protocol.hasGroups()) {
             protocolInstanceRepository.findByIdForUpdate(protocolInstance.getId());
         }

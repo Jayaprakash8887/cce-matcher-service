@@ -117,7 +117,7 @@ public class StepInstanceScope {
      */
     private StepGroupInstance latestGroupInstancePath(Enrollment enrollment, String groupId) {
         StepGroupInstance deepestGroupInstance = null;
-        for (PlanDefinitionParser.GroupMetadata groupMetadata : enrollment.groupsFromTopDown(groupId)) {
+        for (PlanDefinitionParser.GroupMetadata groupMetadata : enrollment.groupsFromInnermostOut(groupId).reversed()) {
             Optional<StepGroupInstance> latestGroupInstance = groupInstanceRepository.findLatestCycle(
                     enrollment.protocolInstance().getId(), groupMetadata.id(),
                     deepestGroupInstance == null ? null : deepestGroupInstance.getId());
