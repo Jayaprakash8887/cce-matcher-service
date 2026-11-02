@@ -137,7 +137,8 @@ public class StepGroupService {
             if (groupInstanceForWork.isEmpty()) {
                 return Optional.empty(); // a calendar-day group with no instance yet
             }
-            parentGroupInstance = groupInstanceForWork.get(); // the next group in is looked up inside this instance
+            groupInstance = groupInstanceForWork.get();
+            parentGroupInstance = groupInstance; // the next group in is looked up inside this instance
         }
         return Optional.of(groupInstance);
     }
