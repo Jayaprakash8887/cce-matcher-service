@@ -876,16 +876,16 @@ An action typed `step` with `groupingBehavior: logical-group` is a **step group*
 **When a group gets a new instance.** An event or other work that needs a group instance joins an existing one, unless a trigger opens a new one. There are three triggers, the same at every level of nesting, from the top-level group down (`StepGroupService.opensNewGroupInstance`):
 1. **None yet:** the group has no instance within its parent's instance, or within the enrollment for a top-level group.
 2. **New calendar day:** for a group with `cycle-boundary: calendar-day`, an event on a later clinical day than the latest instance's. Days are counted in the deployment's time zone (`cce.step-groups.calendar-zone`); an instance's day is its `opened_at` there. An event for the same or an earlier day joins the latest instance. This is the Rwanda patient journey, one instance per visit.
-3. **Entry step:** for a group with `cycle-boundary: entry-step`, an event for its entry step when the latest instance already has that step completed and none awaiting it. The group names its entry step, by action id, in the `cycle-entry-step` extension (`GroupMetadata.entryStepId`). It must be one of the group's own steps, waiting on nothing inside the group, so an event inside a nested group never starts the group's next cycle. This is a Consultation that can happen twice in one visit.
+3. **Entry step:** for a group with `cycle-boundary: entry-step`, each event for its entry step starts the next cycle, even when the latest cycle was opened by another of its steps and still awaits its entry step. That cycle isn't closed: its awaiting entry step stays open. The group names its entry step, by action id, in the `cycle-entry-step` extension (`GroupMetadata.entryStepId`). It must be one of the group's own steps, waiting on nothing inside the group, so an event inside a nested group never starts the group's next cycle. This is a Consultation that can happen twice in one visit.
 
 A group without `cycle-boundary` gets only the first: one instance within each instance of its parent. Each instance is a cycle, numbered by `cycle_index` within its parent instance, so each visit's Consultation has its own cycle 0. Earlier cycles stay open: nothing closes them yet. A group inside a repeating group can only repeat by `entry-step`; the Protocol Service refuses any other `cycle-boundary` there at load, since every event of one visit falls on the same day.
 
 What opens a new instance:
 - **An event** for one of the group's steps. It can bring any of the three triggers, and otherwise joins the latest instance. `StepGroupService.groupInstanceForEvent` applies them level by level, so an event in a nested group first opens any missing instance of the groups around it.
-- **The parent opening.** A new instance opens its mandatory nested groups that have no predecessor inside it, and creates its mandatory member steps with none (`PlanDefinitionParser.membersCreatedOnOpen`). The rest arrive later, through progressive instantiation or their own events.
+- **The parent opening.** A new instance opens its mandatory nested groups that have no predecessor inside it and don't repeat by visit, and creates its mandatory member steps with none (`PlanDefinitionParser.membersCreatedOnOpen`). The rest arrive later, through progressive instantiation or their own events.
 - **Work that follows a completion:** progressive instantiation, for a step or group that follows the completed step, and backfill, for a mandatory step the journey skipped. Work only ever brings the first trigger. Otherwise it joins the instance around the completed step when there is one, so it stays in the visit that gave rise to it, and else the latest (`StepGroupService.groupInstanceForWork`, and `openFollowingGroup` for a group that follows a step).
 
-Only an event opens a `calendar-day` group, so a cycle's day is a day the patient came: neither its parent opening nor work opens one, and a step or group that would go in it waits for that event. A group that follows a step, or opens with its parent, opens only when it is mandatory; an optional one waits for an event for one of its steps.
+Only an event opens a group that repeats by visit, `calendar-day` or `entry-step`, since its cycles start when the patient comes: a `calendar-day` cycle on the day of an event, an `entry-step` group's first cycle with an event for any of its steps and each later one with its entry step. Neither its parent opening nor work opens one, and a step or group that would go in it waits for that event. So a Consultation that follows check-in doesn't open when check-in completes, and its history isn't awaited or judged until the Consultation starts. A group that follows a step, or opens with its parent, opens only when it is mandatory; an optional one waits for an event for one of its steps.
 
 **How an event finds its group instance.** `StepGroupService.groupInstanceForEvent` makes two passes over the groups around the matched step. First it finds them, from the step's own group out to the top level (`Enrollment.groupsFromInnermostOut`). Then it chooses their instances from the outermost in, because a group's instances are looked up inside the instance just chosen for its parent (`findLatestCycle`), and a trigger on an outer group gives the groups inside it fresh instances. Each group is decided on its own `cycle-boundary`, by `opensNewGroupInstance`:
 
@@ -898,7 +898,7 @@ flowchart TD
     HAS -->|"No"| T1["Trigger 1, none yet:<br/>open cycle 0"]
     HAS -->|"Yes"| CB{"The group's own<br/>cycle-boundary"}
     CB -->|"calendar-day"| DAY{"Event on a later day<br/>than that instance's?"}
-    CB -->|"entry-step"| ENTRY{"Event for its entry step,<br/>completed there and none awaiting?"}
+    CB -->|"entry-step"| ENTRY{"Event for its entry step?"}
     CB -->|"none"| JOIN["Join the latest instance"]
     DAY -->|"Yes"| T2["Trigger 2: open the next cycle"]
     DAY -->|"No"| JOIN
@@ -912,7 +912,7 @@ flowchart TD
     MORE -->|"No"| DONE["The step's own group instance:<br/>the event's step instance goes here"]
 ```
 
-Work (`StepGroupService.groupInstanceForWork`) makes the same two passes, with three differences at each group: the instance around the completed step comes first, so the work stays in the visit that gave rise to it; triggers 2 and 3 never apply; and a `calendar-day` group with no instance stops the walk, leaving the work for that group's first event.
+Work (`StepGroupService.groupInstanceForWork`) makes the same two passes, with three differences at each group: the instance around the completed step comes first, so the work stays in the visit that gave rise to it; triggers 2 and 3 never apply; and a group that repeats by visit with no instance stops the walk, leaving the work for that group's first event.
 
 ```mermaid
 flowchart TD
@@ -921,7 +921,7 @@ flowchart TD
     AROUND -->|"Yes"| USE["Use that instance"]
     AROUND -->|"No"| HAS{"Latest instance inside<br/>the parent's?"}
     HAS -->|"Yes"| JOIN["Join it"]
-    HAS -->|"No, calendar-day"| WAIT["Stop: wait for an event of its own"]
+    HAS -->|"No, repeats by visit"| WAIT["Stop: wait for an event of its own"]
     HAS -->|"No, any other group"| T1["Trigger 1, none yet: open cycle 0"]
     USE --> MORE{"A group further in?"}
     JOIN --> MORE
@@ -945,9 +945,9 @@ Groups without `cycle-boundary` get one instance however many times a step insid
 
 | Event | Group 1 | Group 2 | Group 3 |
 |---|---|---|---|
-| step 1, day 1 09:00 | none yet: opens c0 | opens c0 with Group 1 | opens c0 with Group 2; the event joins it |
-| step 1, day 1 10:00 | same day: joins c0 | joins c0 | step 1 is its entry step, already completed in c0: opens c1 |
-| step 1, day 2 | new calendar day: opens c1 | none inside Group 1 c1: opens c0 there, with Group 1 | opens c0 inside the new Group 2, with it |
+| step 1, day 1 09:00 | none yet: opens c0 | opens c0 with Group 1 | none yet: opens c0. Group 2's opening left it alone: only an event opens a group that repeats by visit |
+| step 1, day 1 10:00 | same day: joins c0 | joins c0 | step 1 is its entry step: opens c1 |
+| step 1, day 2 | new calendar day: opens c1 | none inside Group 1 c1: opens c0 there, with Group 1 | none inside the new Group 2: opens c0 there |
 
 A new instance at one level means fresh instances below it, numbered from 0 again: cycle numbers count within the parent instance. For the same reason, a `calendar-day` group inside a repeating group could never reach its own next day, and the Protocol Service refuses one at load (`aGroupInsideARepeatingGroupCannotRepeatByCalendarDay`).
 
@@ -958,7 +958,7 @@ A new instance at one level means fresh instances below it, numbered from 0 agai
 | intake | none yet: opens c0 | opens c0 with Group 1, creating step 1, awaiting |
 | step 1 | step 1 is not its entry step: joins c0 | joins c0; the event completes step 1 |
 | step 1 again | joins c0, the same way | joins c0; the event adds a further completed step 1 there |
-| intake again | intake is its entry step, already completed in c0: opens c1 | opens c0 inside Group 1 c1 |
+| intake again | intake is its entry step: opens c1 | opens c0 inside Group 1 c1 |
 
 Only one of a group's own steps can be its entry step: the Protocol Service refuses to load a group that names a step in a nested group, so such a step never starts the group's next cycle.
 
@@ -969,16 +969,20 @@ Only one of a group's own steps can be its entry step: the Protocol Service refu
 | history | none yet: opens c0, creating BP, awaiting |
 | BP | joins c0; the event completes BP |
 | BP again | BP is not the entry step, so it doesn't start a cycle: joins c0 as a further completed BP |
-| history again | history is the entry step, already completed in c0: opens c1 |
+| history again | history is the entry step: opens c1 (`eachEntryStepStartsTheNextCycle`) |
+
+If BP comes first, it opens c0, creating history, awaiting. The history that follows still starts c1, and c0's history stays awaiting (`anotherStepFirst_opensCycle0_andTheEntryStepThatFollowsStartsCycle1`).
 
 *4. The patient comes back, and the first event of the day is inside a nested group* (`RwandaJourney.anEventOnALaterDayOpensANewVisit_ratherThanCompletingThePreviousVisitsOpenRow`). `journey [calendar-day] { check-in; consultation [entry-step: history], after check-in { history; examination } }`
 
 | Event | journey | consultation |
 |---|---|---|
-| check-in, day 1 | none yet: opens visit 1 (c0) | opens c0 as check-in completes, since it follows check-in; history awaits |
-| history, day 15, before any day-15 check-in | new calendar day: opens visit 2 (c1), creating its check-in, awaiting | none inside visit 2: opens c0 there; the event completes history in it |
+| check-in, day 1 | none yet: opens visit 1 (c0) | not opened: it follows check-in, but only an event for one of its steps opens it (`checkInDoesNotStartAConsultation_onlyAnEventForOneOfItsStepsDoes`) |
+| history, day 1 | joins visit 1 | none yet: opens c0; the event completes history, and examination, which follows it, awaits |
+| examination, day 15, before any other day-15 event | new calendar day: opens visit 2 (c1), creating its check-in, awaiting | none inside visit 2: opens c0 there, creating history, awaiting; the event completes examination in it |
+| history, day 15 | joins visit 2 | history is the entry step: opens c1; c0's history stays awaiting |
 
-Visit 1's history stays awaiting. Visit 2's check-in, created when visit 2 opened, has no due date and is never judged. A late event for an earlier day goes to the latest visit instead, and opens nothing (`aLateEventForAnEarlierDay_goesToTheLatestVisit`).
+Visit 1's examination stays awaiting. Visit 2's check-in, created when visit 2 opened, has no due date and is never judged. A late event for an earlier day goes to the latest visit instead, and opens no visit (`aLateEventForAnEarlierDay_goesToTheLatestVisit`). A prescription on day 15 with no Consultation started that day doesn't backfill examination: there is no Consultation for it to go in (`aStepThatWouldBeBackfilledIntoAConsultationNotYetStarted_waitsForTheConsultation`).
 
 *5. Work opens a first instance* (`StepsAcrossAGroupBoundary`). `registration; visit { bp, 7 days after registration; weight }; treatment after bp`
 

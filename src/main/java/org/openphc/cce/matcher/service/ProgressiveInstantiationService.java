@@ -79,7 +79,7 @@ public class ProgressiveInstantiationService {
      *   <li>another of its prerequisites is still in flight: that prerequisite's completion runs this
      *       again, so the due date counts from the last prerequisite to finish rather than whichever
      *       happened to complete first;</li>
-     *   <li>its group has no instance it can join: a {@code calendar-day} group opens only for an event of
+     *   <li>its group has no instance it can join: a group that repeats by visit opens only for an event of
      *       its own;</li>
      *   <li>it already has a step instance where it would go. Its own event may have created one before
      *       this prerequisite completed, a redelivered event may have completed the prerequisite again, or
@@ -118,8 +118,8 @@ public class ProgressiveInstantiationService {
                     dependentStepMetadata.groupId(), completedStepInstance.getStepGroupInstance(),
                     completedStepInstance.getCompletedAt());
             if (groupInstanceForWork.isEmpty()) {
-                // A calendar-day group with no cycle yet: only an event of its own opens one.
-                log.debug("Skipping progressive instantiation of {} — its calendar-day group has no cycle yet "
+                // A group that repeats by visit, with no cycle yet: only an event of its own opens one.
+                log.debug("Skipping progressive instantiation of {} — its group repeats by visit and has no cycle yet "
                         + "(instanceId={})", dependentStepMetadata.id(), enrollment.protocolInstance().getId());
                 return;
             }

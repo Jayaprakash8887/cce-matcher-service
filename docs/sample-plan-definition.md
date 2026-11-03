@@ -650,8 +650,8 @@ Each `definitionCanonical` referenced in the PlanDefinition must have a register
 | ActivityDefinition type | `kind` | `CommunicationRequest`, `Task`, `ServiceRequest` |
 | Canonical reference format | `definitionCanonical` | `<url>|<version>` |
 | Step group | `groupingBehavior` on a `step`-typed action with child actions | `logical-group` makes it a group (see [Step Groups](#step-groups)); `visual-group` and `sentence-group` keep it a plain step |
-| Repeating by visit | `extension` `cycle-boundary` on a step group, `valueCode` `calendar-day` or `entry-step` | A new cycle each day the patient comes, or each time an entry step repeats once done (see [Step Groups](#step-groups)) |
-| Entry step | `extension` `cycle-entry-step` on an `entry-step` group, required, exactly once, `valueId` a step's action id | The step whose repeat starts a new cycle: one of the group's own steps, waiting on nothing inside it (see [Step Groups](#step-groups)) |
+| Repeating by visit | `extension` `cycle-boundary` on a step group, `valueCode` `calendar-day` or `entry-step` | A new cycle each day the patient comes, or with each event for its entry step. Only an event opens such a group, never its predecessor or parent (see [Step Groups](#step-groups)) |
+| Entry step | `extension` `cycle-entry-step` on an `entry-step` group, required, exactly once, `valueId` a step's action id | The step that starts each cycle: one of the group's own steps, waiting on nothing inside it (see [Step Groups](#step-groups)) |
 
 `requiredBehavior` note: **only `must` is mandatory, and an absent value is not.** `must` drives the "must"-only predecessor backfill gating in `MandatoryStepBackfillService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`), and it is the only value that gets an SLA schedule: a step that is not `must` is never pre-created by progressive instantiation (only materialized on the fly if its own trigger fires), gets no `step_sla_state_transition` rows, and can therefore be neither `OVERDUE` nor `MISSED` — nothing was required of it, so there is nothing for it to breach. The one definition is `RequiredBehavior.isMandatory`.
 
@@ -779,11 +779,11 @@ What this example does, given a mandatory `anc-registration` step elsewhere in t
 
 What this example does:
 - **The first event of a day** opens that day's visit, a new journey cycle; any other event that day joins it. Days are counted in the deployment's time zone (`CCE_CALENDAR_ZONE`). An event dated on an earlier day, arriving late, joins the latest visit.
-- **Check-in completing** opens the visit's Consultation, with history awaited.
-- **A second history in one visit,** once the first is recorded, starts a second Consultation in that visit. A second examination joins the current Consultation as a further row.
+- **Check-in completing doesn't open the Consultation,** although it follows check-in: a group that repeats by visit opens only for an event for one of its steps. Until then history is not awaited or judged.
+- **Each history starts a Consultation.** The first in a visit starts the first, and a second history in that visit starts a second. An examination joins the current Consultation, as a further row if it already has one. An examination before any history in the visit starts the Consultation, with history awaiting; the history that follows then starts a second Consultation.
 - **Only cycle 0 has a planned due date.** A visit or Consultation opened because the patient came back has none, so its awaited steps are not judged.
 
-**The entry step.** An `entry-step` group must name its entry step, the step whose repeat starts a new cycle, by action id in the `cycle-entry-step` extension. The Consultation above names history. The entry step decides only when a cycle starts, not the order of the steps, so another step can still wait on nothing. A Consultation where BP can be taken before history, but only a repeated history starts a new Consultation:
+**The entry step.** An `entry-step` group must name its entry step, the step that starts each cycle, by action id in the `cycle-entry-step` extension. The Consultation above names history. The entry step decides only when a cycle starts, not the order of the steps, so another step can still wait on nothing. A Consultation where BP can be taken before history, but only history starts a new Consultation:
 
 ```json
 {
@@ -805,7 +805,8 @@ What this example does:
 
 What this example does:
 - **A second BP** joins the current Consultation as a further completed BP, since BP is not the entry step.
-- **A repeated history,** once the current one is done, starts the next Consultation.
+- **Each history starts the next Consultation.**
+- **A BP before any history** starts the first Consultation, with history awaiting. The history that follows still starts the next Consultation, and the first one's history stays awaiting.
 - **The extension is required, exactly once.** An `entry-step` group without it, or with it more than once, is refused at load.
 - **The entry step must be one of the group's own steps, waiting on nothing inside it.** A step in a nested group, a step outside the group, or a step with a `relatedAction` to another step in the group is refused at load.
 

@@ -102,7 +102,7 @@ public class StepGroupService {
         Optional<StepGroupInstance> latestGroupInstance =
                 latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance);
         boolean opensNewGroupInstance =
-                opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, Optional.of(matchedEventMetadata));
+                opensNewGroupInstance(groupMetadata, latestGroupInstance, Optional.of(matchedEventMetadata));
         if (opensNewGroupInstance) {
             // A trigger fired: the event opens the group's next instance.
             return openNextGroupInstance(enrollment, groupMetadata, parentGroupInstance, latestGroupInstance,
@@ -118,8 +118,8 @@ public class StepGroupService {
      * event (see {@link #groupInstanceForEvent}): find the groups from {@code groupId} outwards, then choose
      * their instances from the outermost in.
      *
-     * <p>Empty when a {@code calendar-day} group on the way has no instance yet: only an event for one of
-     * its steps opens one, so the instance's day is the day the patient came.
+     * <p>Empty when a group on the way that repeats by visit has no instance yet: only an event for one of
+     * its steps opens one, since its cycles start when the patient comes.
      *
      * @param anchor   the instance of the step whose completion the work comes from, or null
      * @param openedAt the clinical time of whatever needs the instance
@@ -136,7 +136,7 @@ public class StepGroupService {
             Optional<StepGroupInstance> groupInstanceForWork =
                     groupInstanceForWorkWithin(parentGroupInstance, enrollment, groupMetadata, anchor, openedAt);
             if (groupInstanceForWork.isEmpty()) {
-                return Optional.empty(); // a calendar-day group with no instance yet
+                return Optional.empty(); // a group that repeats by visit, with no instance yet
             }
             groupInstance = groupInstanceForWork.get();
             parentGroupInstance = groupInstance; // the next group in is looked up inside this instance
@@ -147,7 +147,7 @@ public class StepGroupService {
     /**
      * The instance of one group, inside {@code parentGroupInstance}, that work goes to: the instance around
      * {@code anchor}, else the group's latest, else a first one (see {@link #opensNewGroupInstance}). Empty
-     * for a {@code calendar-day} group with no instance yet.
+     * for a group that repeats by visit with no instance yet.
      */
     private Optional<StepGroupInstance> groupInstanceForWorkWithin(StepGroupInstance parentGroupInstance,
                                                                    Enrollment enrollment,
@@ -162,13 +162,13 @@ public class StepGroupService {
         Optional<StepGroupInstance> latestGroupInstance =
                 latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance);
         boolean opensNewGroupInstance =
-                opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, Optional.empty());
+                opensNewGroupInstance(groupMetadata, latestGroupInstance, Optional.empty());
         if (opensNewGroupInstance) {
             // None yet: work opens the group's first instance.
             return Optional.of(openNextGroupInstance(enrollment, groupMetadata, parentGroupInstance,
                     latestGroupInstance, openedAt, null));
         }
-        // An instance exists: work joins the latest. Empty for a calendar-day group with none yet.
+        // An instance exists: work joins the latest. Empty for a group that repeats by visit with none yet.
         return latestGroupInstance;
     }
 
@@ -200,19 +200,19 @@ public class StepGroupService {
      * Whether the group {@code groupMetadata} describes gets a new instance within its parent's, rather
      * than its latest one. There are three triggers, the same at every level of nesting:
      * <ol>
-     *   <li><b>None yet:</b> the group has no instance. Only an event opens a {@code calendar-day} group's
-     *       first instance (see {@link #onlyAnEventOpens}).</li>
+     *   <li><b>None yet:</b> the group has no instance. Only an event opens the first instance of a group
+     *       that repeats by visit (see {@link #onlyAnEventOpens}).</li>
      *   <li><b>New calendar day:</b> for a {@code calendar-day} group, an event on a later day than the
      *       latest instance's.</li>
-     *   <li><b>Entry step repeated:</b> for an {@code entry-step} group, an event for its entry step that
-     *       the latest instance has already completed.</li>
+     *   <li><b>Entry step:</b> for an {@code entry-step} group, an event for its entry step, even when the
+     *       latest instance was opened by another of its steps and still awaits its entry step.</li>
      * </ol>
      * Work that isn't an event only ever brings the first: otherwise it joins the latest instance.
      *
      * @param matchedEventMetadata the event for one of the group's steps, or empty when other work needs
      *                             the instance
      */
-    private boolean opensNewGroupInstance(Enrollment enrollment, PlanDefinitionParser.GroupMetadata groupMetadata,
+    private boolean opensNewGroupInstance(PlanDefinitionParser.GroupMetadata groupMetadata,
                                           Optional<StepGroupInstance> latestGroupInstance,
                                           Optional<MatchedEventMetadata> matchedEventMetadata) {
         if (latestGroupInstance.isEmpty()) { // 1. none yet
@@ -224,20 +224,21 @@ public class StepGroupService {
         if (groupMetadata.cycleBoundary() == CycleBoundary.CALENDAR_DAY) { // 2. new calendar day
             return isOnLaterDay(latestGroupInstance.get(), matchedEventMetadata.get().occurredAt());
         }
-        if (groupMetadata.cycleBoundary() == CycleBoundary.ENTRY_STEP) { // 3. entry step repeated
-            return repeatsCompletedEntryStep(enrollment, groupMetadata, latestGroupInstance.get(),
-                    matchedEventMetadata.get().matchedStepMetadata());
+        if (groupMetadata.cycleBoundary() == CycleBoundary.ENTRY_STEP) { // 3. entry step
+            return matchedEventMetadata.get().matchedStepMetadata().id().equals(groupMetadata.entryStepId());
         }
         return false; // a group that doesn't repeat by visit: every event joins its latest instance
     }
 
     /**
-     * Whether only an event for one of the group's steps can open an instance of it. True of a
-     * {@code calendar-day} group: an instance's day is the day the patient came, so neither a predecessor
+     * Whether only an event for one of the group's steps can open an instance of it. True of a group that
+     * repeats by visit, since its cycles start when the patient comes: a {@code calendar-day} group's on
+     * the day of an event, an {@code entry-step} group's with its entry step. Neither a predecessor
      * completing nor the parent opening opens one.
      */
     private static boolean onlyAnEventOpens(PlanDefinitionParser.GroupMetadata groupMetadata) {
-        return groupMetadata.cycleBoundary() == CycleBoundary.CALENDAR_DAY;
+        return groupMetadata.cycleBoundary() == CycleBoundary.CALENDAR_DAY
+                || groupMetadata.cycleBoundary() == CycleBoundary.ENTRY_STEP;
     }
 
     /**
@@ -249,29 +250,6 @@ public class StepGroupService {
                 .isAfter(groupInstance.getOpenedAt().atZoneSameInstant(calendarZone).toLocalDate());
     }
 
-    /**
-     * Whether {@code matchedStepMetadata} is the group's entry step, the step it names in
-     * {@code cycle-entry-step}, and {@code latestGroupInstance} has already completed it, with none of its
-     * step instances there still awaiting an event.
-     */
-    private static boolean repeatsCompletedEntryStep(Enrollment enrollment,
-                                                     PlanDefinitionParser.GroupMetadata groupMetadata,
-                                                     StepGroupInstance latestGroupInstance,
-                                                     PlanDefinitionParser.StepMetadata matchedStepMetadata) {
-        boolean isEntryStep = matchedStepMetadata.id().equals(groupMetadata.entryStepId());
-        if (!isEntryStep) {
-            return false;
-        }
-        List<StepInstance> matchedStepInstances = enrollment.stepInstances().stream()
-                .filter(stepInstance -> matchedStepMetadata.id().equals(stepInstance.getActionId())
-                        && StepInstanceScope.isDirectlyIn(stepInstance, latestGroupInstance))
-                .toList();
-        return matchedStepInstances.stream()
-                .anyMatch(stepInstance -> stepInstance.getStepStatus() == StepStatus.COMPLETED)
-                && matchedStepInstances.stream()
-                .noneMatch(stepInstance -> stepInstance.getStepStatus() == StepStatus.NOT_STARTED);
-    }
-
     /** An event for a step in a group: the step it matched, and the event's clinical time. */
     private record MatchedEventMetadata(PlanDefinitionParser.StepMetadata matchedStepMetadata, OffsetDateTime occurredAt) {
     }
@@ -281,14 +259,14 @@ public class StepGroupService {
     /**
      * Open the first instance of the group {@code groupMetadata} describes, which follows
      * {@code completedStepInstance}, now that it has completed. Optional groups are never opened in
-     * advance, only when one of their steps is matched, and neither is a {@code calendar-day} group, whose
-     * first instance is the day of its first event. A group with other prerequisites still in flight waits
-     * for them; each of their completions runs this again.
+     * advance, only when one of their steps is matched, and neither is a group that repeats by visit,
+     * whose cycles start when the patient comes (see {@link #onlyAnEventOpens}). A group with other
+     * prerequisites still in flight waits for them; each of their completions runs this again.
      */
     public void openFollowingGroup(Enrollment enrollment, StepInstance completedStepInstance,
                                    PlanDefinitionParser.GroupMetadata groupMetadata) {
         if (!groupMetadata.isMandatory() || onlyAnEventOpens(groupMetadata)) {
-            return; // optional and calendar-day groups open only for an event of their own
+            return; // optional groups, and groups that repeat by visit, open only for an event of their own
         }
         StepGroupInstance parentGroupInstance = null;
         if (groupMetadata.parentGroupId() != null) {
@@ -298,7 +276,7 @@ public class StepGroupService {
                     groupMetadata.parentGroupId(), completedStepInstance.getStepGroupInstance(),
                     completedStepInstance.getCompletedAt());
             if (parentForWork.isEmpty()) {
-                return; // inside a calendar-day group with no instance yet
+                return; // inside a group that repeats by visit, with no instance yet
             }
             parentGroupInstance = parentForWork.get();
         }
@@ -344,7 +322,7 @@ public class StepGroupService {
     /**
      * Open an instance of a group and create what it holds from the start: its mandatory members with
      * no predecessor inside the group. Steps are due at the instance's due date; nested groups open their
-     * first instance, except a {@code calendar-day} group, which only an event opens. Later members
+     * first instance, except a group that repeats by visit, which only an event opens. Later members
      * arrive through progressive instantiation, with the due dates their own {@code relatedAction}
      * offsets give them. The caller has checked that this cycle doesn't exist.
      *
@@ -371,7 +349,7 @@ public class StepGroupService {
             }
         }
         for (PlanDefinitionParser.GroupMetadata memberGroupMetadata : membersCreatedOnOpen.groups()) {
-            // A calendar-day group waits for an event of its own: its instance's day is the day the patient came.
+            // A group that repeats by visit waits for an event of its own: its cycles start when the patient comes.
             if (!onlyAnEventOpens(memberGroupMetadata)) {
                 openNextGroupInstance(enrollment, memberGroupMetadata, groupInstance, Optional.empty(), openedAt,
                         matchedStepId);

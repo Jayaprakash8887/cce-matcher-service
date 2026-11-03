@@ -114,7 +114,7 @@ public class MandatoryStepBackfillService {
             Optional<StepGroupInstance> groupInstanceForWork = stepGroupService.groupInstanceForWork(enrollment,
                     missingStepMetadata.groupId(), completedStepInstance.getStepGroupInstance(), dueDate);
             if (groupInstanceForWork.isEmpty()) {
-                return; // a calendar-day group with no cycle yet: only an event of its own opens one
+                return; // a group that repeats by visit, with no cycle yet: only an event of its own opens one
             }
             groupInstance = groupInstanceForWork.get();
             if (StepInstanceScope.hasStepInstance(enrollment, missingStepId, groupInstance)) {

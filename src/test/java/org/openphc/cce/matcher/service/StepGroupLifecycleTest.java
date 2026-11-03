@@ -606,6 +606,28 @@ class StepGroupLifecycleTest {
 
             assertEquals(2, cyclesOf("consultation", null).size());
         }
+
+        @Test
+        void anotherStepFirst_opensCycle0_andTheEntryStepThatFollowsStartsCycle1() {
+            record("bp", T0);
+
+            assertEquals(1, cyclesOf("consultation", null).size());
+
+            record("history", T0.plusMinutes(10));
+
+            List<StepGroupInstance> cycles = cyclesOf("consultation", null);
+            assertEquals(2, cycles.size());
+            assertEquals(cycles.get(1).getId(), groupInstanceIdOf(rowsFor("history").stream()
+                    .filter(stepInstance -> stepInstance.getStepStatus() == StepStatus.COMPLETED).findFirst().orElseThrow()));
+        }
+
+        @Test
+        void eachEntryStepStartsTheNextCycle() {
+            record("history", T0);
+            record("history", T0.plusMinutes(10));
+
+            assertEquals(2, cyclesOf("consultation", null).size());
+        }
     }
 
     @Nested
@@ -689,13 +711,15 @@ class StepGroupLifecycleTest {
         @Test
         void anEventOnALaterDayOpensANewVisit_ratherThanCompletingThePreviousVisitsOpenRow() {
             record("check-in", DAY_1);
-            StepInstance undone = rowsFor("history").get(0);
+            record("history", DAY_1.plusMinutes(10));
+            StepInstance undone = rowsFor("examination").get(0);
 
-            StepInstance history = record("history", DAY_15);
+            StepInstance examination = record("examination", DAY_15);
 
-            assertNotSame(undone, history);
+            assertNotSame(undone, examination);
             assertEquals(StepStatus.NOT_STARTED, undone.getStepStatus());
-            assertEquals(consultation(visit(1), 0).getId(), groupInstanceIdOf(history));
+            assertEquals(consultation(visit(1), 0).getId(), groupInstanceIdOf(examination),
+                    "an examination before any history that day still opens the visit's Consultation");
             StepInstance checkIn = rowsFor("check-in").get(1);
             assertEquals(visit(1).getId(), groupInstanceIdOf(checkIn), "the new visit's check-in is awaited");
             assertNull(checkIn.getDueDate(), "with no due date, so it is never judged");
@@ -710,7 +734,7 @@ class StepGroupLifecycleTest {
 
             assertEquals(2, cyclesOf("journey", null).size(), "no visit is opened for an earlier day");
             assertEquals(consultation(visit(1), 0).getId(), groupInstanceIdOf(history));
-            assertEquals(StepStatus.NOT_STARTED, rowsFor("history").get(0).getStepStatus());
+            assertTrue(cyclesOf("consultation", visit(0)).isEmpty(), "the earlier visit gets no Consultation");
         }
 
         @Test
@@ -776,16 +800,25 @@ class StepGroupLifecycleTest {
         }
 
         @Test
-        void aBackfilledStepJoinsTheLatestVisit() {
+        void checkInDoesNotStartAConsultation_onlyAnEventForOneOfItsStepsDoes() {
+            record("check-in", DAY_1);
+
+            assertTrue(cyclesOf("consultation", visit(0)).isEmpty());
+            assertTrue(rowsFor("history").isEmpty(), "history is not awaited before the Consultation starts");
+
+            record("history", DAY_1.plusMinutes(10));
+
+            assertEquals(1, cyclesOf("consultation", visit(0)).size());
+        }
+
+        @Test
+        void aStepThatWouldBeBackfilledIntoAConsultationNotYetStarted_waitsForTheConsultation() {
             record("check-in", DAY_1);
 
             record("prescription", DAY_15);
 
-            StepGroupInstance laterConsultation = consultation(visit(1), 0);
-            List<StepInstance> examinations = rowsFor("examination");
-            assertEquals(1, examinations.size());
-            assertEquals(laterConsultation.getId(), groupInstanceIdOf(examinations.get(0)));
-            assertTrue(cyclesOf("consultation", visit(0)).stream().allMatch(c -> c.getCycleIndex() == 0));
+            assertTrue(cyclesOf("consultation", visit(1)).isEmpty());
+            assertTrue(rowsFor("examination").isEmpty(), "examination is not backfilled while no Consultation has started");
         }
     }
 

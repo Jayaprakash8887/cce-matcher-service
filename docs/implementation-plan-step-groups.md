@@ -44,7 +44,7 @@
 
 ## 2. Points the decisions left open
 
-The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–32, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
+The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–33, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
 - ***Decided:*** settled by an explicit decision.
 - ***Accepted proposal:*** an engineering detail whose proposal stands unless a reviewer objects.
 - ***Open:*** no answer yet.
@@ -234,7 +234,7 @@ A second set of vitals arrives during a quarterly cycle whose vitals row is alre
 
 **26. What opens a `calendar-day` cycle.** *(B2 + E2; blocks phase 2)*
 Phase 1 opens a group in advance when its predecessor completes, or when its parent opens. For a `calendar-day` journey that follows registration, that would open a cycle on the registration day (point 6). If the first visit comes on another day, it opens a new cycle, and the first stays behind as an empty visit that never happened (closed as incomplete by E3 from phase 4).
-*Decided:* only an event for one of its steps opens a `calendar-day` cycle. A predecessor completing, or its parent opening, opens none. An `entry-step` group, such as the Consultation inside a visit, still opens in advance as other groups do.
+*Decided:* only an event for one of its steps opens a `calendar-day` cycle. A predecessor completing, or its parent opening, opens none. An `entry-step` group, such as the Consultation inside a visit, still opens in advance as other groups do. Point 33 replaces this last sentence.
 
 **27. What follows a group before completion exists.** *(E2 + F2; blocks phases 1 and 4)*
 Phases 1–3 never record a group as complete or closed (F2). Anything that follows a group, such as ANC visit 3 after visit 2, is created only when the group completes or closes (E2, point 7). Before phase 4 it would never be created, and an event for one of its steps would open it with no due date.
@@ -266,6 +266,10 @@ Point 5 derives the entry steps from `relatedAction`, so one setting carries two
 ]
 ```
 Only the named step starts a new cycle, so BP can wait on nothing without a second BP opening a second Consultation. At load, the protocol service rejects an `entry-step` group without exactly one such extension, a value that isn't a `valueId`, a name that isn't a step directly in the group with no predecessor inside it, and the extension on any other action. A step that waits on another in the group can't start a cycle. An `entry-step` protocol written before this must add the extension to load.
+
+**33. What opens an `entry-step` cycle.** *(B2 + E2; phase 2)*
+Point 26 kept opening an `entry-step` group in advance. The Consultation then opens when check-in completes, with history awaiting, and the first history completes it rather than starting a Consultation. The entry step should say when a cycle starts.
+*Decided:* only an event for one of its steps opens an `entry-step` cycle, as point 26 decided for `calendar-day`. A predecessor completing, its parent opening, progressive instantiation and backfill open none; work for a group with no cycle yet waits for that event. An event for any of its steps opens cycle 0 when there is none, so a BP taken before history opens it, with history awaiting. Each event for the entry step starts the next cycle, even when the latest cycle was opened by another step and still awaits its entry step: that cycle isn't closed, and its awaiting entry step stays open. Consequences: until the Consultation starts, history is not awaited and is never judged; and when BP opens cycle 0, the history created awaiting there is never completed, since the history event starts cycle 1. With a due date, that history goes `OVERDUE` and then `MISSED`. This is accepted until cycles are closed (E3, phase 4).
 
 ---
 
@@ -397,7 +401,7 @@ ALTER TABLE intelligence_event_log
 
 **Matcher.**
 - **`calendar-day`:** a new cycle opens for an event whose clinical day, in the configured zone (point 4), is later than the latest cycle's day; every other event goes to the latest cycle (points 6 and 12). Only an event opens a cycle; a predecessor completing, or the parent opening, opens none (point 26).
-- **`entry-step`:** a new cycle opens when an entry step repeats after it's already completed in the current cycle (point 5).
+- **`entry-step`:** an event for any of its steps opens cycle 0 when there is none, and each event for the entry step starts the next cycle (points 32 and 33). Only an event opens a cycle; a predecessor completing, or the parent opening, opens none (point 33).
 - **Where an event goes is decided before its row is looked for.** For a step in a group, under the `protocol_instance` lock, from the top-level group down: each group's latest cycle inside its parent's, or a new cycle by the rules above. The event then completes the step's open row in that instance, or adds a further row there (point 25). Phase 1 looked for the open row first, outside the lock; on a new day it would complete the previous day's row instead of opening the new cycle.
 - **A later cycle has no due date.** Cycle 0 of a visit-driven group takes its planned due date, as any group does. A cycle opened because the patient came back has none (design §7.1, "usually none"): its predecessor's completion + offset would already be past. Its entry steps other than the matched one are therefore unjudged (point 29); the matched step is due when its event made it, as in phase 1.
 - **Earlier cycles stay open.** Closing them as incomplete is E3, which comes with closure in phase 4 (F2).
@@ -415,6 +419,7 @@ ALTER TABLE intelligence_event_log
 - Two Consultations in one visit.
 - A `calendar-day` group inside a visit is rejected at load.
 - A `calendar-day` journey following registration opens no cycle until the first visit (point 26).
+- A Consultation following check-in opens no cycle until an event for one of its steps (point 33).
 - A repeated history opens a second Consultation; a repeated examination joins the current one (point 25).
 - Point 18's example: an examination left undone in an earlier visit raises no order violation in a later one.
 - Point 30's example: a prescription left undone in an earlier visit raises no order violation for a top-level treatment in a later one, and a prescription missing from the later visit is backfilled into it.
