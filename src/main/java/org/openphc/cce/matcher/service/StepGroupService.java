@@ -74,7 +74,7 @@ public class StepGroupService {
     public StepGroupInstance groupInstanceForEvent(Enrollment enrollment,
                                                    PlanDefinitionParser.StepMetadata matchedStepMetadata,
                                                    OffsetDateTime occurredAt) {
-        MatchedEvent matchedEvent = new MatchedEvent(matchedStepMetadata, occurredAt);
+        MatchedEventMetadata matchedEventMetadata = new MatchedEventMetadata(matchedStepMetadata, occurredAt);
 
         // 1. The groups around the step, from its own group out to the top level.
         List<PlanDefinitionParser.GroupMetadata> groupsAroundStep =
@@ -84,7 +84,7 @@ public class StepGroupService {
         StepGroupInstance parentGroupInstance = null; // a top-level group's instances belong to the enrollment
         StepGroupInstance groupInstance = null;
         for (PlanDefinitionParser.GroupMetadata groupMetadata : groupsAroundStep.reversed()) {
-            groupInstance = groupInstanceForEventWithin(parentGroupInstance, enrollment, groupMetadata, matchedEvent);
+            groupInstance = groupInstanceForEventWithin(parentGroupInstance, enrollment, groupMetadata, matchedEventMetadata);
             parentGroupInstance = groupInstance; // the next group in is looked up inside this instance
         }
         return groupInstance;
@@ -97,15 +97,16 @@ public class StepGroupService {
     private StepGroupInstance groupInstanceForEventWithin(StepGroupInstance parentGroupInstance,
                                                           Enrollment enrollment,
                                                           PlanDefinitionParser.GroupMetadata groupMetadata,
-                                                          MatchedEvent matchedEvent) {
+                                                          MatchedEventMetadata matchedEventMetadata) {
+        // Fetch latest group Instance inside a parent group instance
         Optional<StepGroupInstance> latestGroupInstance =
                 latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance);
         boolean opensNewGroupInstance =
-                opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, Optional.of(matchedEvent));
+                opensNewGroupInstance(enrollment, groupMetadata, latestGroupInstance, Optional.of(matchedEventMetadata));
         if (opensNewGroupInstance) {
             // A trigger fired: the event opens the group's next instance.
             return openNextGroupInstance(enrollment, groupMetadata, parentGroupInstance, latestGroupInstance,
-                    matchedEvent.occurredAt(), matchedEvent.matchedStepMetadata().id());
+                    matchedEventMetadata.occurredAt(), matchedEventMetadata.matchedStepMetadata().id());
         }
         // No trigger: the event joins the latest instance.
         return latestGroupInstance.orElseThrow();
@@ -208,24 +209,24 @@ public class StepGroupService {
      * </ol>
      * Work that isn't an event only ever brings the first: otherwise it joins the latest instance.
      *
-     * @param matchedEvent the event for one of the group's steps, or empty when other work needs the
-     *                     instance
+     * @param matchedEventMetadata the event for one of the group's steps, or empty when other work needs
+     *                             the instance
      */
     private boolean opensNewGroupInstance(Enrollment enrollment, PlanDefinitionParser.GroupMetadata groupMetadata,
                                           Optional<StepGroupInstance> latestGroupInstance,
-                                          Optional<MatchedEvent> matchedEvent) {
+                                          Optional<MatchedEventMetadata> matchedEventMetadata) {
         if (latestGroupInstance.isEmpty()) { // 1. none yet
-            return matchedEvent.isPresent() || !onlyAnEventOpens(groupMetadata);
+            return matchedEventMetadata.isPresent() || !onlyAnEventOpens(groupMetadata);
         }
-        if (matchedEvent.isEmpty()) {
+        if (matchedEventMetadata.isEmpty()) {
             return false; // triggers 2 and 3 come only with an event: work joins the latest instance
         }
         if (groupMetadata.cycleBoundary() == CycleBoundary.CALENDAR_DAY) { // 2. new calendar day
-            return isOnLaterDay(latestGroupInstance.get(), matchedEvent.get().occurredAt());
+            return isOnLaterDay(latestGroupInstance.get(), matchedEventMetadata.get().occurredAt());
         }
         if (groupMetadata.cycleBoundary() == CycleBoundary.ENTRY_STEP) { // 3. entry step repeated
             return repeatsCompletedEntryStep(enrollment, groupMetadata, latestGroupInstance.get(),
-                    matchedEvent.get().matchedStepMetadata());
+                    matchedEventMetadata.get().matchedStepMetadata());
         }
         return false; // a group that doesn't repeat by visit: every event joins its latest instance
     }
@@ -274,7 +275,7 @@ public class StepGroupService {
     }
 
     /** An event for a step in a group: the step it matched, and the event's clinical time. */
-    private record MatchedEvent(PlanDefinitionParser.StepMetadata matchedStepMetadata, OffsetDateTime occurredAt) {
+    private record MatchedEventMetadata(PlanDefinitionParser.StepMetadata matchedStepMetadata, OffsetDateTime occurredAt) {
     }
 
     // ── Opening ──

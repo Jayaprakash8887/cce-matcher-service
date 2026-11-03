@@ -4,6 +4,7 @@ import ca.uhn.fhir.context.FhirContext;
 import org.hl7.fhir.r4.model.CodeType;
 import org.hl7.fhir.r4.model.Coding;
 import org.hl7.fhir.r4.model.Duration;
+import org.hl7.fhir.r4.model.IdType;
 import org.hl7.fhir.r4.model.PlanDefinition;
 import org.hl7.fhir.r4.model.PlanDefinition.ActionGroupingBehavior;
 import org.hl7.fhir.r4.model.PlanDefinition.ActionRelationshipType;
@@ -493,6 +494,142 @@ class StepGroupLifecycleTest {
 
             assertNull(groupInstanceOf("consultation").orElseThrow().getCompletedAt());
             assertNull(groupInstanceOf("journey").orElseThrow().getCompletedAt());
+        }
+    }
+
+    @Nested
+    class RepeatingGroupInsideGroupsThatDoNot {
+
+        /** Group 1 holding group 2 holding group 3, which repeats by calendar day and holds step 1. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent group1 = group(pd.addAction(), "group-1", "must");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
+            PlanDefinitionActionComponent group3 = repeatingBy(group(group2.addAction(), "group-3", "must"), "calendar-day");
+            step(group3.addAction(), "step-1", "must");
+            use(pd);
+        }
+
+        @Test
+        void aNewDayOpensANewCycleOfTheRepeatingGroupOnly_insideTheSameEnclosingInstances() {
+            record("step-1", T0);
+            record("step-1", T0.plusDays(1));
+
+            List<StepGroupInstance> group1 = cyclesOf("group-1", null);
+            assertEquals(1, group1.size());
+            List<StepGroupInstance> group2 = cyclesOf("group-2", group1.get(0));
+            assertEquals(1, group2.size());
+            List<StepGroupInstance> group3 = cyclesOf("group-3", group2.get(0));
+            assertEquals(2, group3.size());
+            assertEquals(List.of(group3.get(0).getId(), group3.get(1).getId()),
+                    rowsFor("step-1").stream().map(StepGroupLifecycleTest::groupInstanceIdOf).toList());
+        }
+    }
+
+    @Nested
+    class OuterGroupRepeatsByDay {
+
+        /**
+         * Group 1 repeating by calendar day, holding group 2, holding group 3 repeating by entry step with
+         * step 1 as its entry step. A group inside a repeating group can only repeat by entry step.
+         */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "calendar-day");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
+            PlanDefinitionActionComponent group3 = repeatingBy(group(group2.addAction(), "group-3", "must"), "entry-step");
+            step(group3.addAction(), "step-1", "must");
+            use(pd);
+        }
+
+        @Test
+        void aRepeatSameDayStartsTheInnerGroupAgain_aNewDayStartsEveryLevelAgain() {
+            record("step-1", T0);
+            record("step-1", T0.plusHours(1));
+            record("step-1", T0.plusDays(1));
+
+            List<StepGroupInstance> group1 = cyclesOf("group-1", null);
+            assertEquals(2, group1.size(), "one group 1 instance per day");
+
+            List<StepGroupInstance> dayOneGroup2 = cyclesOf("group-2", group1.get(0));
+            assertEquals(1, dayOneGroup2.size());
+            assertEquals(2, cyclesOf("group-3", dayOneGroup2.get(0)).size(), "step 1 repeated on day 1");
+
+            List<StepGroupInstance> dayTwoGroup2 = cyclesOf("group-2", group1.get(1));
+            assertEquals(1, dayTwoGroup2.size());
+            assertEquals(1, cyclesOf("group-3", dayTwoGroup2.get(0)).size(), "day 2 starts again at cycle 0");
+        }
+    }
+
+    @Test
+    void aGroupInsideARepeatingGroupCannotRepeatByCalendarDay() {
+        PlanDefinition pd = new PlanDefinition();
+        PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "calendar-day");
+        PlanDefinitionActionComponent group2 = repeatingBy(group(group1.addAction(), "group-2", "must"), "calendar-day");
+        step(group2.addAction(), "step-1", "must");
+
+        assertThrows(IllegalArgumentException.class, () -> use(pd));
+    }
+
+    @Nested
+    class NamedEntryStep {
+
+        /** A Consultation repeating by entry step, of history and BP, naming history as its only entry step. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent consultation =
+                    repeatingBy(group(pd.addAction(), "consultation", "must"), "entry-step");
+            consultation.addExtension("http://openphc.org/fhir/StructureDefinition/cycle-entry-step",
+                    new IdType("history"));
+            step(consultation.addAction(), "history", "must");
+            step(consultation.addAction(), "bp", "must");
+            use(pd);
+        }
+
+        @Test
+        void aRepeatedStepThatIsNotNamed_joinsTheCycle_aRepeatedNamedOneStartsTheNext() {
+            record("history", T0);
+            record("bp", T0.plusMinutes(10));
+            record("bp", T0.plusMinutes(20));
+
+            assertEquals(1, cyclesOf("consultation", null).size());
+            assertEquals(2, rowsFor("bp").size());
+
+            record("history", T0.plusHours(2));
+
+            assertEquals(2, cyclesOf("consultation", null).size());
+        }
+    }
+
+    @Nested
+    class EntryStepParent {
+
+        /** Group 1 repeating by entry step, holding its entry step intake and group 2, which holds step 1. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "entry-step");
+            step(group1.addAction(), "intake", "must");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
+            step(group2.addAction(), "step-1", "must");
+            use(pd);
+        }
+
+        @Test
+        void aRepeatedStepInsideANestedGroup_neverStartsTheParentsNextCycle_itsOwnEntryStepDoes() {
+            record("intake", T0);
+            record("step-1", T0.plusMinutes(10));
+            record("step-1", T0.plusMinutes(20));
+
+            assertEquals(1, cyclesOf("group-1", null).size());
+            assertEquals(1, cyclesOf("group-2", cyclesOf("group-1", null).get(0)).size());
+
+            record("intake", T0.plusHours(2));
+
+            assertEquals(2, cyclesOf("group-1", null).size());
         }
     }
 

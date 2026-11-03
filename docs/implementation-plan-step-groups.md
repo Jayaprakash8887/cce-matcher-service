@@ -44,7 +44,7 @@
 
 ## 2. Points the decisions left open
 
-The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–29, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
+The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–32, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
 - ***Decided:*** settled by an explicit decision.
 - ***Accepted proposal:*** an engineering detail whose proposal stands unless a reviewer objects.
 - ***Open:*** no answer yet.
@@ -100,7 +100,7 @@ Event times are stored in UTC. A check-in at 23:30 UTC on 3 Mar is 01:30 on 4 Ma
 Two Consultations on one visit day fall on the same calendar day, so calendar days can't tell them apart. Each repeating group therefore needs its own rule for what starts a cycle. Putting that rule in the PlanDefinition, as a value, is also the answer to B3's "value-driven".
 *Decided:* one extension on the group, with a coded value:
 - `calendar-day`: a new cycle for each clinical day on which the group has events. This is the Rwanda journey.
-- `entry-step`: a new cycle when one of the group's entry steps is matched and the current cycle's row for that step is already completed. The entry steps are derived from the group's structure, not named: they are its members with no predecessor inside the group. Example: history at 10:00, then examination, is one Consultation; history again at 15:00, when the 10:00 history is already done, opens a second. If a group has two entry steps, say history and vitals, the first match of each joins the same cycle.
+- `entry-step`: a new cycle when one of the group's entry steps is matched and the current cycle's row for that step is already completed. The entry steps are derived from the group's structure, not named: they are its members with no predecessor inside the group. Example: history at 10:00, then examination, is one Consultation; history again at 15:00, when the 10:00 history is already done, opens a second. If a group has two entry steps, say history and vitals, the first match of each joins the same cycle. A group can also name its entry steps (point 32).
 
 ```json
 "extension": [{
@@ -256,6 +256,17 @@ Point 18 reads a predecessor inside the instance it shares with the completed st
 Backfill creates the mandatory predecessors of the work observed so far, but it follows only the `relatedAction` edges between steps. A predecessor declared on a group is missed. Say ANC visit 2 follows registration, and a BP for visit 2 arrives before registration has been recorded. The BP step names no predecessor of its own, so registration is never backfilled, never goes `OVERDUE`, and the gap stays invisible. Declared on the BP step instead, registration would have been backfilled.
 *Decided:* a step also waits on what its enclosing groups wait on, at every level. Backfill follows those edges, so registration is backfilled when no row for it exists (into its own group's instance if it has one, by points 28 and 30). Order violations still look only at a step's own immediate predecessors.
 
+**32. Naming a group's entry steps.** *(B2; phase 2)*
+Point 5 derives the entry steps from `relatedAction`, so one setting carries two meanings. Say a Consultation holds history and BP, and BP has no `relatedAction` to history because it can be taken first. BP is then an entry step too, and a second BP in the same visit opens a second Consultation. The only way to stop it is to make BP follow history, which also changes BP's order and due date.
+*Accepted proposal:* an `entry-step` group can name its entry steps, with one `cycle-entry-step` extension per step, whose `valueId` is the step's action id:
+```json
+"extension": [
+  { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",   "valueCode": "entry-step" },
+  { "url": "http://openphc.org/fhir/StructureDefinition/cycle-entry-step", "valueId": "history" }
+]
+```
+When a group names any, only those are its entry steps. When it names none, point 5's rule applies, so existing protocols are unchanged. At load, the protocol service rejects the extension on anything but an `entry-step` group, a value that isn't a `valueId`, and a name that isn't a step directly in the group with no predecessor inside it. A step that waits on another in the group can't start a cycle.
+
 ---
 
 ## 3. Phases
@@ -382,6 +393,7 @@ ALTER TABLE intelligence_event_log
 **Load checks** (`validateGroups` in `cce-common-util`, run by the protocol service at load)
 - Accept the `cycle-boundary` extension, with `calendar-day` or `entry-step` (point 5).
 - A repeating group inside another repeating group uses `entry-step`; a `calendar-day` group there is rejected (point 23).
+- Accept the `cycle-entry-step` extension on an `entry-step` group, naming a step directly in it with no predecessor inside it (point 32).
 
 **Matcher.**
 - **`calendar-day`:** a new cycle opens for an event whose clinical day, in the configured zone (point 4), is later than the latest cycle's day; every other event goes to the latest cycle (points 6 and 12). Only an event opens a cycle; a predecessor completing, or the parent opening, opens none (point 26).
