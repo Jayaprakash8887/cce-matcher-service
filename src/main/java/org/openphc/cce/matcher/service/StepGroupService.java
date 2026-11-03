@@ -204,8 +204,8 @@ public class StepGroupService {
      *       first instance (see {@link #onlyAnEventOpens}).</li>
      *   <li><b>New calendar day:</b> for a {@code calendar-day} group, an event on a later day than the
      *       latest instance's.</li>
-     *   <li><b>Entry step repeated:</b> for an {@code entry-step} group, an event for one of its entry steps
-     *       that the latest instance has already completed.</li>
+     *   <li><b>Entry step repeated:</b> for an {@code entry-step} group, an event for its entry step that
+     *       the latest instance has already completed.</li>
      * </ol>
      * Work that isn't an event only ever brings the first: otherwise it joins the latest instance.
      *
@@ -250,17 +250,15 @@ public class StepGroupService {
     }
 
     /**
-     * Whether {@code matchedStepMetadata} is one of the group's entry steps that {@code latestGroupInstance}
-     * has already completed, with none of its step instances there still awaiting an event. An entry step
-     * is a direct member step with no predecessor inside the group.
+     * Whether {@code matchedStepMetadata} is the group's entry step, the step it names in
+     * {@code cycle-entry-step}, and {@code latestGroupInstance} has already completed it, with none of its
+     * step instances there still awaiting an event.
      */
     private static boolean repeatsCompletedEntryStep(Enrollment enrollment,
                                                      PlanDefinitionParser.GroupMetadata groupMetadata,
                                                      StepGroupInstance latestGroupInstance,
                                                      PlanDefinitionParser.StepMetadata matchedStepMetadata) {
-        boolean isEntryStep = PlanDefinitionParser.cycleEntrySteps(groupMetadata.id(), enrollment.protocol().steps(),
-                        enrollment.protocol().groups(), enrollment.protocol().dependencyGraph()).stream()
-                .anyMatch(entryStepMetadata -> entryStepMetadata.id().equals(matchedStepMetadata.id()));
+        boolean isEntryStep = matchedStepMetadata.id().equals(groupMetadata.entryStepId());
         if (!isEntryStep) {
             return false;
         }

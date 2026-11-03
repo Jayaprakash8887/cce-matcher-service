@@ -876,7 +876,7 @@ An action typed `step` with `groupingBehavior: logical-group` is a **step group*
 **When a group gets a new instance.** An event or other work that needs a group instance joins an existing one, unless a trigger opens a new one. There are three triggers, the same at every level of nesting, from the top-level group down (`StepGroupService.opensNewGroupInstance`):
 1. **None yet:** the group has no instance within its parent's instance, or within the enrollment for a top-level group.
 2. **New calendar day:** for a group with `cycle-boundary: calendar-day`, an event on a later clinical day than the latest instance's. Days are counted in the deployment's time zone (`cce.step-groups.calendar-zone`); an instance's day is its `opened_at` there. An event for the same or an earlier day joins the latest instance. This is the Rwanda patient journey, one instance per visit.
-3. **Entry step repeated:** for a group with `cycle-boundary: entry-step`, an event for one of its entry steps when the latest instance already has that step completed and none awaiting it. Entry steps are the group's direct member steps with no predecessor inside it, or, when the group names them with the `cycle-entry-step` extension, only those named (`PlanDefinitionParser.cycleEntrySteps`). Either way, an event inside a nested group never starts the group's next cycle. This is a Consultation that can happen twice in one visit.
+3. **Entry step repeated:** for a group with `cycle-boundary: entry-step`, an event for its entry step when the latest instance already has that step completed and none awaiting it. The group names its entry step, by action id, in the `cycle-entry-step` extension (`GroupMetadata.entryStepId`). It must be one of the group's own steps, waiting on nothing inside the group, so an event inside a nested group never starts the group's next cycle. This is a Consultation that can happen twice in one visit.
 
 A group without `cycle-boundary` gets only the first: one instance within each instance of its parent. Each instance is a cycle, numbered by `cycle_index` within its parent instance, so each visit's Consultation has its own cycle 0. Earlier cycles stay open: nothing closes them yet. A group inside a repeating group can only repeat by `entry-step`; the Protocol Service refuses any other `cycle-boundary` there at load, since every event of one visit falls on the same day.
 
@@ -898,7 +898,7 @@ flowchart TD
     HAS -->|"No"| T1["Trigger 1, none yet:<br/>open cycle 0"]
     HAS -->|"Yes"| CB{"The group's own<br/>cycle-boundary"}
     CB -->|"calendar-day"| DAY{"Event on a later day<br/>than that instance's?"}
-    CB -->|"entry-step"| ENTRY{"Event for one of its entry steps,<br/>completed there and none awaiting?"}
+    CB -->|"entry-step"| ENTRY{"Event for its entry step,<br/>completed there and none awaiting?"}
     CB -->|"none"| JOIN["Join the latest instance"]
     DAY -->|"Yes"| T2["Trigger 2: open the next cycle"]
     DAY -->|"No"| JOIN
@@ -941,7 +941,7 @@ flowchart TD
 
 Groups without `cycle-boundary` get one instance however many times a step inside them repeats.
 
-*2. The outer group repeats by day, an inner one by entry step* (`OuterGroupRepeatsByDay`). `Group 1 [calendar-day] { Group 2 { Group 3 [entry-step] { step 1 } } }`
+*2. The outer group repeats by day, an inner one by entry step* (`OuterGroupRepeatsByDay`). `Group 1 [calendar-day] { Group 2 { Group 3 [entry-step: step 1] { step 1 } } }`
 
 | Event | Group 1 | Group 2 | Group 3 |
 |---|---|---|---|
@@ -951,7 +951,7 @@ Groups without `cycle-boundary` get one instance however many times a step insid
 
 A new instance at one level means fresh instances below it, numbered from 0 again: cycle numbers count within the parent instance. For the same reason, a `calendar-day` group inside a repeating group could never reach its own next day, and the Protocol Service refuses one at load (`aGroupInsideARepeatingGroupCannotRepeatByCalendarDay`).
 
-*3. An entry-step parent ignores steps in its nested groups* (`EntryStepParent`). `Group 1 [entry-step] { intake; Group 2 { step 1 } }`
+*3. An entry-step parent ignores steps in its nested groups* (`EntryStepParent`). `Group 1 [entry-step: intake] { intake; Group 2 { step 1 } }`
 
 | Event | Group 1 | Group 2 |
 |---|---|---|
@@ -960,18 +960,18 @@ A new instance at one level means fresh instances below it, numbered from 0 agai
 | step 1 again | joins c0, the same way | joins c0; the event adds a further completed step 1 there |
 | intake again | intake is its entry step, already completed in c0: opens c1 | opens c0 inside Group 1 c1 |
 
-Only a group's direct member steps can be its entry steps, so a step inside a nested group never starts its next cycle. The Protocol Service also refuses to load a group that names a step in a nested group as its entry step.
+Only one of a group's own steps can be its entry step: the Protocol Service refuses to load a group that names a step in a nested group, so such a step never starts the group's next cycle.
 
-*3a. A group names its entry step* (`NamedEntryStep`). `Consultation [entry-step, names history] { history; BP }`, where neither step waits on the other. Without the name, both would be entry steps.
+*3a. Only the entry step starts a cycle* (`EntryStep`). `Consultation [entry-step: history] { history; BP }`, where neither step waits on the other.
 
 | Event | Consultation |
 |---|---|
 | history | none yet: opens c0, creating BP, awaiting |
 | BP | joins c0; the event completes BP |
-| BP again | BP is not named, so it doesn't start a cycle: joins c0 as a further completed BP |
-| history again | history is named, already completed in c0: opens c1 |
+| BP again | BP is not the entry step, so it doesn't start a cycle: joins c0 as a further completed BP |
+| history again | history is the entry step, already completed in c0: opens c1 |
 
-*4. The patient comes back, and the first event of the day is inside a nested group* (`RwandaJourney.anEventOnALaterDayOpensANewVisit_ratherThanCompletingThePreviousVisitsOpenRow`). `journey [calendar-day] { check-in; consultation [entry-step], after check-in { history; examination } }`
+*4. The patient comes back, and the first event of the day is inside a nested group* (`RwandaJourney.anEventOnALaterDayOpensANewVisit_ratherThanCompletingThePreviousVisitsOpenRow`). `journey [calendar-day] { check-in; consultation [entry-step: history], after check-in { history; examination } }`
 
 | Event | journey | consultation |
 |---|---|---|

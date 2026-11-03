@@ -192,6 +192,12 @@ class StepGroupLifecycleTest {
         return group;
     }
 
+    /** {@code group} names {@code stepId} as its entry step: the step whose repeat starts a new cycle. */
+    private static PlanDefinitionActionComponent namingEntryStep(PlanDefinitionActionComponent group, String stepId) {
+        group.addExtension("http://openphc.org/fhir/StructureDefinition/cycle-entry-step", new IdType(stepId));
+        return group;
+    }
+
     private static void after(PlanDefinitionActionComponent action, String prerequisiteId, int days) {
         action.addRelatedAction()
                 .setActionId(prerequisiteId)
@@ -539,7 +545,7 @@ class StepGroupLifecycleTest {
             PlanDefinition pd = new PlanDefinition();
             PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "calendar-day");
             PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
-            PlanDefinitionActionComponent group3 = repeatingBy(group(group2.addAction(), "group-3", "must"), "entry-step");
+            PlanDefinitionActionComponent group3 = namingEntryStep(repeatingBy(group(group2.addAction(), "group-3", "must"), "entry-step"), "step-1");
             step(group3.addAction(), "step-1", "must");
             use(pd);
         }
@@ -574,23 +580,21 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
-    class NamedEntryStep {
+    class EntryStep {
 
-        /** A Consultation repeating by entry step, of history and BP, naming history as its only entry step. */
+        /** A Consultation repeating by entry step, of history and BP, naming history as its entry step. */
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             PlanDefinitionActionComponent consultation =
-                    repeatingBy(group(pd.addAction(), "consultation", "must"), "entry-step");
-            consultation.addExtension("http://openphc.org/fhir/StructureDefinition/cycle-entry-step",
-                    new IdType("history"));
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "consultation", "must"), "entry-step"), "history");
             step(consultation.addAction(), "history", "must");
             step(consultation.addAction(), "bp", "must");
             use(pd);
         }
 
         @Test
-        void aRepeatedStepThatIsNotNamed_joinsTheCycle_aRepeatedNamedOneStartsTheNext() {
+        void aRepeatedStepThatIsNotTheEntryStep_joinsTheCycle_aRepeatedEntryStepStartsTheNext() {
             record("history", T0);
             record("bp", T0.plusMinutes(10));
             record("bp", T0.plusMinutes(20));
@@ -611,7 +615,7 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "entry-step");
+            PlanDefinitionActionComponent group1 = namingEntryStep(repeatingBy(group(pd.addAction(), "group-1", "must"), "entry-step"), "intake");
             step(group1.addAction(), "intake", "must");
             PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
             step(group2.addAction(), "step-1", "must");
@@ -649,7 +653,7 @@ class StepGroupLifecycleTest {
             PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey", "must"), "calendar-day");
             step(journey.addAction(), "check-in", "must");
             PlanDefinitionActionComponent consultation =
-                    repeatingBy(group(journey.addAction(), "consultation", "must"), "entry-step");
+                    namingEntryStep(repeatingBy(group(journey.addAction(), "consultation", "must"), "entry-step"), "history");
             after(consultation, "check-in", 0);
             step(consultation.addAction(), "history", "must");
             after(step(consultation.addAction(), "examination", "must"), "history", 0);

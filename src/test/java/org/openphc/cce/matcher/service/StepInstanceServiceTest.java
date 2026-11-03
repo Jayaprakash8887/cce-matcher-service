@@ -207,7 +207,7 @@ class StepInstanceServiceTest {
             PlanDefinitionParser.StepMetadata bp = new PlanDefinitionParser.StepMetadata("bp", "BP",
                     List.of(), List.of(), null, null, "must", List.of(), "visit-2");
             PlanDefinitionParser.GroupMetadata visit = new PlanDefinitionParser.GroupMetadata("visit-2", "Visit 2",
-                    null, List.of(), null, null, "must", null, null, List.of(), List.of());
+                    null, List.of(), null, null, "must", null, null, null, List.of());
             when(parsedProtocolCache.get(any(), any())).thenReturn(new ParsedProtocolCache.ParsedProtocol(
                     List.of(bp), PlanDefinitionParser.buildDependencyGraph(List.of(bp), List.of(visit)), List.of(visit)));
             when(groupInstanceRepository.save(any(StepGroupInstance.class))).thenAnswer(invocation -> {

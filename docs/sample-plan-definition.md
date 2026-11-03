@@ -651,7 +651,7 @@ Each `definitionCanonical` referenced in the PlanDefinition must have a register
 | Canonical reference format | `definitionCanonical` | `<url>|<version>` |
 | Step group | `groupingBehavior` on a `step`-typed action with child actions | `logical-group` makes it a group (see [Step Groups](#step-groups)); `visual-group` and `sentence-group` keep it a plain step |
 | Repeating by visit | `extension` `cycle-boundary` on a step group, `valueCode` `calendar-day` or `entry-step` | A new cycle each day the patient comes, or each time an entry step repeats once done (see [Step Groups](#step-groups)) |
-| Named entry steps | `extension` `cycle-entry-step` on an `entry-step` group, `valueId` a step's action id, once per entry step | Only the named steps start a new cycle; without it, every step directly in the group with no predecessor inside it does (see [Step Groups](#step-groups)) |
+| Entry step | `extension` `cycle-entry-step` on an `entry-step` group, required, exactly once, `valueId` a step's action id | The step whose repeat starts a new cycle: one of the group's own steps, waiting on nothing inside it (see [Step Groups](#step-groups)) |
 
 `requiredBehavior` note: **only `must` is mandatory, and an absent value is not.** `must` drives the "must"-only predecessor backfill gating in `MandatoryStepBackfillService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`), and it is the only value that gets an SLA schedule: a step that is not `must` is never pre-created by progressive instantiation (only materialized on the fly if its own trigger fires), gets no `step_sla_state_transition` rows, and can therefore be neither `OVERDUE` nor `MISSED` — nothing was required of it, so there is nothing for it to breach. The one definition is `RequiredBehavior.isMandatory`.
 
@@ -763,7 +763,8 @@ What this example does, given a mandatory `anc-registration` step elsewhere in t
       "requiredBehavior": "must",
       "groupingBehavior": "logical-group",
       "extension": [
-        { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary", "valueCode": "entry-step" }
+        { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",   "valueCode": "entry-step" },
+        { "url": "http://openphc.org/fhir/StructureDefinition/cycle-entry-step", "valueId": "history" }
       ],
       "relatedAction": [{ "actionId": "check-in", "relationship": "after-end" }],
       "action": [
@@ -782,7 +783,7 @@ What this example does:
 - **A second history in one visit,** once the first is recorded, starts a second Consultation in that visit. A second examination joins the current Consultation as a further row.
 - **Only cycle 0 has a planned due date.** A visit or Consultation opened because the patient came back has none, so its awaited steps are not judged.
 
-**Naming the entry steps.** The Consultation's entry steps are worked out from its structure: its own steps that wait on nothing inside it, here history alone. Examination is not one, because it follows history. To choose them yourself, name each one with a `cycle-entry-step` extension on the group. A Consultation where BP can be taken before history, but only a repeated history starts a new Consultation:
+**The entry step.** An `entry-step` group must name its entry step, the step whose repeat starts a new cycle, by action id in the `cycle-entry-step` extension. The Consultation above names history. The entry step decides only when a cycle starts, not the order of the steps, so another step can still wait on nothing. A Consultation where BP can be taken before history, but only a repeated history starts a new Consultation:
 
 ```json
 {
@@ -803,9 +804,9 @@ What this example does:
 ```
 
 What this example does:
-- **Without the extension,** history and BP would both be entry steps, since neither waits on the other, and a second BP in one visit would start a second Consultation.
-- **With it,** a second BP joins the current Consultation as a further completed BP. Only a repeated history, once the current one is done, starts the next.
-- **To name more than one,** repeat the extension, one `valueId` each.
-- **A named step must be one of the group's own steps, waiting on nothing inside it.** A step in a nested group, a step outside the group, or a step with a `relatedAction` to another step in the group is refused at load.
+- **A second BP** joins the current Consultation as a further completed BP, since BP is not the entry step.
+- **A repeated history,** once the current one is done, starts the next Consultation.
+- **The extension is required, exactly once.** An `entry-step` group without it, or with it more than once, is refused at load.
+- **The entry step must be one of the group's own steps, waiting on nothing inside it.** A step in a nested group, a step outside the group, or a step with a `relatedAction` to another step in the group is refused at load.
 
-The Protocol Service rejects at load a group that has a trigger or no step, a `selectionBehavior` other than `all`, or `tolerance-days` on an optional group or on a group with `cycle-boundary`. It rejects a `cycle-boundary` code other than `calendar-day` or `entry-step`, a `calendar-day` group inside another repeating group, and an `entry-step` group with no entry step. It rejects `cycle-entry-step` on anything but an `entry-step` group, without a `valueId`, or naming anything but a step directly in the group with no predecessor inside it. It also refuses, until they are built, `timing` on a group (scheduled repeats), `tolerance-days` on a group (group deadlines), a `fire-event` child of a group, and any action that follows a group.
+The Protocol Service rejects at load a group that has a trigger or no step, a `selectionBehavior` other than `all`, or `tolerance-days` on an optional group or on a group with `cycle-boundary`. It rejects a `cycle-boundary` code other than `calendar-day` or `entry-step`, and a `calendar-day` group inside another repeating group. It rejects an `entry-step` group without exactly one `cycle-entry-step`, with no `valueId`, or naming anything but a step directly in the group with no predecessor inside it, and `cycle-entry-step` on any other action. It also refuses, until they are built, `timing` on a group (scheduled repeats), `tolerance-days` on a group (group deadlines), a `fire-event` child of a group, and any action that follows a group.
