@@ -570,13 +570,54 @@ class StepGroupLifecycleTest {
     }
 
     @Test
-    void aGroupInsideARepeatingGroupCannotRepeatByCalendarDay() {
+    void aGroupInsideACalendarDayGroupCannotRepeatByCalendarDay() {
         PlanDefinition pd = new PlanDefinition();
         PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "calendar-day");
         PlanDefinitionActionComponent group2 = repeatingBy(group(group1.addAction(), "group-2", "must"), "calendar-day");
         step(group2.addAction(), "step-1", "must");
 
         assertThrows(IllegalArgumentException.class, () -> use(pd));
+    }
+
+    @Nested
+    class VisitsInAnEpisode {
+
+        private static final OffsetDateTime NEXT_PREGNANCY = T0.plusDays(300);
+
+        /** A pregnancy repeating by entry step, registration; inside it, an ANC visit repeating by calendar day. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent pregnancy =
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "pregnancy", "must"), "entry-step"), "registration");
+            step(pregnancy.addAction(), "registration", "must");
+            PlanDefinitionActionComponent visit = repeatingBy(group(pregnancy.addAction(), "visit", "must"), "calendar-day");
+            step(visit.addAction(), "bp", "must");
+            use(pd);
+        }
+
+        @Test
+        void eachDayIsAVisitInThePregnancy_andANewRegistrationStartsTheNextPregnancyWithItsOwnVisits() {
+            record("registration", T0);
+            assertTrue(cyclesOf("visit", cyclesOf("pregnancy", null).get(0)).isEmpty(),
+                    "registration opens no visit: only an event of its own does");
+
+            record("bp", T0.plusDays(1));
+            record("bp", T0.plusDays(1).plusHours(1));
+            record("bp", T0.plusDays(30));
+
+            List<StepGroupInstance> pregnancies = cyclesOf("pregnancy", null);
+            assertEquals(1, pregnancies.size(), "a visit's BP is not the pregnancy's entry step");
+            assertEquals(2, cyclesOf("visit", pregnancies.get(0)).size(), "one visit per day");
+
+            record("registration", NEXT_PREGNANCY);
+            record("bp", NEXT_PREGNANCY.plusDays(1));
+
+            pregnancies = cyclesOf("pregnancy", null);
+            assertEquals(2, pregnancies.size());
+            assertEquals(1, cyclesOf("visit", pregnancies.get(1)).size(), "the next pregnancy's visits start at cycle 0");
+            assertEquals(0, cyclesOf("visit", pregnancies.get(1)).get(0).getCycleIndex());
+        }
     }
 
     @Nested

@@ -1,7 +1,7 @@
 # Implementation plan: Step groups
 
 **Status:** Draft for review.
-**Based on:** [design-repeating-step-groups.md](design-repeating-step-groups.md) (the design), the decisions in §1, and the points in §2 with their status. All are as of 2026-10-14. Question ids (A1–E6) are the design's.
+**Based on:** [design-repeating-step-groups.md](design-repeating-step-groups.md) (the design), the decisions in §1, and the points in §2 with their status. All are as of 2026-11-04. Question ids (A1–E6) are the design's.
 **Baseline:** CCE 2.0.0 (`release-2.0.0` of `cce-common-util`, `cce-matcher-service`, `cce-step-sla-service`, `cce-protocol-service`, `cce-data-pipeline`, `cce-insights-service`).
 
 **Approach.** Phase 1 builds the whole data model. Later phases add behaviour. Some phases add something an author writes in a PlanDefinition. Such a phase is switched on by lifting a load-time check in `PlanDefinitionParser.validateGroups` (`cce-common-util`). The protocol service runs that check at load. Until the phase ships, a PlanDefinition that uses its feature is refused at load. So no feature can be half-active in production.
@@ -9,6 +9,8 @@
 Two kinds of behaviour have no such switch:
 1. phase 4's completion and closure. They reach instances already open in production through a one-off pass at release.
 2. intelligence on step `OVERDUE` / `MISSED` (phase 6). It applies to protocols already loaded (§5).
+
+**Code names.** Method and class names are as they were when each phase was built. The step-group code was reorganised later. [architecture-overview.md §6.5](architecture-overview.md#65-step-groups), under "Where the code is", has the current names.
 
 Phases 1 and 2 are all required before production. So are the data-pipeline, insights-service and insights-ui updates for them, which are taken up after phase 2 (§4.4). Scheduled repeats (phase 3) come after the first production release. Protocols without groups behave exactly as today throughout.
 
@@ -50,7 +52,7 @@ Phases 1 and 2 are all required before production. So are the data-pipeline, ins
 
 ## 2. Points the decisions left open
 
-The decisions in §1 left some cases open. In some, two decisions conflicted. In others, a decision didn't cover a case. This section lists them as points 1–35. Each point gives an example, its resolution and the phase it affects. Each resolution is labelled with its status:
+The decisions in §1 left some cases open. In some, two decisions conflicted. In others, a decision didn't cover a case. This section lists them as points 1–32. Each point gives an example, its resolution and the phase it affects. Each resolution is labelled with its status:
 - ***Decided:*** settled by an explicit decision.
 - ***Accepted proposal:*** an engineering detail whose proposal stands unless a reviewer objects.
 - ***Open:*** no answer yet.
@@ -82,10 +84,13 @@ The decisions in §1 left some cases open. In some, two decisions conflicted. In
 | 23 | Which repeating groups may nest inside which | Decided | 2, 3 |
 | 24 | Withdrawn enrollments | Decided | 3 |
 | 25 | An event for a step already completed in its instance | Accepted proposal | 1–3 |
-| 26 | What opens a `calendar-day` cycle | Decided | 2 |
+| 26 | What opens a visit-driven cycle | Decided | 2 |
 | 27 | What follows a group before completion exists | Decided (F2) | 1, 4 |
 | 28 | Which instance a new row joins | Accepted proposal | 2, 3 |
 | 29 | Steps with no due date | Decided | 1 |
+| 30 | A predecessor in a repeating group, seen from outside it | Decided | 2 |
+| 31 | What a group waits on, when one of its steps comes first | Decided | 2 |
+| 32 | An entry step that follows a step outside its group | Decided | 2 |
 
 **1. When is the next scheduled cycle due?** *(B4; blocks phase 3)*
 B4 settles when the next cycle opens (point 20). The design left its due date open. Example: a quarterly review. Cycle 0 is due 10 Jan, and its work finished on 25 Feb. Cycle 1 is due either 10 Apr (fixed calendar) or 25 May (3 months after the work).
@@ -106,7 +111,7 @@ Event times are stored in UTC. A check-in at 23:30 UTC on 3 Mar is 01:30 on 4 Ma
 Two Consultations on one visit day fall on the same calendar day, so calendar days can't tell them apart. Each repeating group therefore needs its own rule for what starts a cycle. That rule goes in the PlanDefinition, as a value. This is also the answer to B3's "value-driven".
 *Decided:* one extension on the group, with a coded value:
 - `calendar-day`: a new cycle for each clinical day on which the group has events. This is the Rwanda journey.
-- `entry-step`: a new cycle when one of the group's entry steps is matched and the current cycle's row for that step is already completed. The entry steps are derived from the group's structure, not named. They are its members with no predecessor inside the group. Example: history at 10:00, then examination, is one Consultation. History again at 15:00 opens a second, since the 10:00 history is already done. If a group has two entry steps, say history and vitals, the first match of each joins the same cycle. Point 32 replaces the derived entry steps with one named entry step.
+- `entry-step`: a new cycle with each event for the group's entry step. Example: history at 10:00, then examination, is one Consultation. History again at 15:00 opens a second. The one exception is a latest cycle that still awaits its entry step (point 32): the event then completes it there.
 
 ```json
 "extension": [{
@@ -115,11 +120,35 @@ Two Consultations on one visit day fall on the same calendar day, so calendar da
 }]
 ```
 
-Scheduled repeats keep `timingTiming.repeat`. A group has one or the other, never both. A further rule could come later, such as one cycle per `Encounter`, or naming the step that starts a cycle. It would be a new code, plus the code that handles it.
+An `entry-step` group names its entry step, by action id, in a second extension:
+
+```json
+"extension": [
+  { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",   "valueCode": "entry-step" },
+  { "url": "http://openphc.org/fhir/StructureDefinition/cycle-entry-step", "valueId": "history" }
+]
+```
+
+The entry step:
+- is required, exactly once, on every `entry-step` group;
+- is a step inside the group, directly or in one of its nested groups. An event for it starts the group's next cycle, and the nested groups around it open fresh inside the new cycle;
+- waits on nothing inside the group. A step that waits on another in the group can't start a cycle.
+
+At load, the protocol service rejects:
+- an `entry-step` group without exactly one `cycle-entry-step`;
+- a value that isn't a `valueId`;
+- a name that isn't a step inside the group with no predecessor inside it;
+- the extension on any other action.
+
+Why the entry step is named rather than worked out from the group's structure: a step's `relatedAction` would then carry two meanings. Say a Consultation holds history and BP, and BP has no `relatedAction` to history, because it can be taken first. BP would then be an entry step too, and a second BP in the same visit would open a second Consultation. The only way to stop it would be to make BP follow history. That would also change BP's order and due date. With the entry step named, only history starts a new cycle.
+
+Opening a cycle, or a nested group inside it, never creates the entry step. Its own event creates it, or the work that expects it (point 32). An `entry-step` protocol written before this must add the extension to load.
+
+Scheduled repeats keep `timingTiming.repeat`. A group has one or the other, never both. A further rule could come later, such as one cycle per `Encounter`. It would be a new code, plus the code that handles it.
 
 *Not chosen:*
-- an extension naming the step that starts a cycle. It can't express `calendar-day`, so it conflicts with B2.
-- a coded value plus an optional named step. It is more to write and validate, with no current need.
+- an extension naming the step that starts a cycle, instead of a code. It can't express `calendar-day`, so it conflicts with B2.
+- entry steps worked out from the group's structure: its steps with no predecessor inside it. A step's `relatedAction` would then decide both its order and whether it starts a cycle (above).
 
 **6. Late events for an earlier day.** *(B2 + F1; blocks phase 2)*
 The patient visited on 3 Mar and 17 Mar. Vitals dated 10 Mar arrive on 18 Mar, after the 17 Mar cycle opened. No cycle exists for 10 Mar.
@@ -230,10 +259,14 @@ Point 7 counts what follows a closed group from its `closed_at`. If `closed_at` 
 A complete instance's `closed_at` stays its `completed_at`.
 
 **23. Which repeating groups may nest inside which.** *(B1 + B3 + B4; blocks phases 2 and 3)*
-Point 5 gives an inner group `entry-step`. But nothing stopped a `calendar-day` group inside a visit, where every event falls on the same day. Nor did anything stop a scheduled group inside any group. A scheduled group inside a visit would restart its schedule with every visit. Inside a one-off group it would clash with point 21. The parent would be complete, and so closed, once one review cycle was done. No further cycle could then open inside it.
+Point 5 gives an inner group `entry-step`. But nothing stopped a `calendar-day` group inside a visit, where every event falls on the same day. An inner `calendar-day` group there could never reach a second day. Nor did anything stop a scheduled group inside any group. A scheduled group inside a visit would restart its schedule with every visit. Inside a one-off group it would clash with point 21. The parent would be complete, and so closed, once one review cycle was done. No further cycle could then open inside it.
+
+An `entry-step` cycle is different: it is not one visit. It lasts until the entry step comes again, often weeks or months later. Example: a pregnancy, started by registration, with an ANC visit on each day she comes.
 *Decided:*
 - a scheduled group is always top-level; nested, it is rejected at load. No current protocol needs one;
-- a repeating group inside another repeating group uses `cycle-boundary` `entry-step`. A `calendar-day` group there is rejected at load. A visit-driven group inside a one-off group is allowed.
+- a `calendar-day` group inside a `calendar-day` group is rejected at load, at any depth, even with an `entry-step` group in between. A group inside a `calendar-day` group can repeat by `entry-step`;
+- a `calendar-day` group inside an `entry-step` group is allowed. Each level is decided on its own `cycle-boundary`. A visit's event joins the latest episode, and opens a new visit on a new day. The episode's entry step starts the next episode, with its visits numbered from cycle 0 again;
+- a visit-driven group inside a one-off group is allowed.
 
 **24. Withdrawn enrollments.** *(B4; blocks phase 3)*
 `ProtocolInstanceStatus` has `WITHDRAWN`. Point 20's schedule would keep opening cycles for a withdrawn patient. Each would have its own deadlines and `MISSED` deviations. An open-ended one would never stop.
@@ -242,14 +275,17 @@ Point 5 gives an inner group `entry-step`. But nothing stopped a `calendar-day` 
 **25. An event for a step already completed in its instance.** *(F1; blocks phases 1–3)*
 A second set of vitals arrives during a quarterly cycle whose vitals row is already completed. No open row awaits it in the latest cycle (point 12), so it is recorded as a new step.
 *Accepted proposal:* it becomes a further completed row in the group's latest cycle (point 12). This matches how a repeated event outside a group adds a row today. It creates no step the cycle already has. Two exceptions open a new cycle instead:
-1. a repeated entry step in an `entry-step` group (point 5);
+1. an event for the entry step in an `entry-step` group, unless the latest cycle still awaits it (points 5 and 32);
 2. an event for a later day in a `calendar-day` group (point 6).
 
 From phase 4, a complete or closed instance still takes the event, but nothing is created inside a closed one (A2).
 
-**26. What opens a `calendar-day` cycle.** *(B2 + E2; blocks phase 2)*
-Phase 1 opens a group in advance when its predecessor completes, or when its parent opens. For a `calendar-day` journey that follows registration, that would open a cycle on the registration day (point 6). If the first visit comes on another day, it opens a new cycle. The first cycle stays behind as an empty visit that never happened. From phase 4, E3 closes it as incomplete.
-*Decided:* only an event for one of its steps opens a `calendar-day` cycle. A predecessor completing, or its parent opening, opens none. An `entry-step` group, such as the Consultation inside a visit, still opens in advance as other groups do. Point 33 replaces this last sentence.
+**26. What opens a visit-driven cycle.** *(B2 + E2; blocks phase 2)*
+Phase 1 opens a group in advance when its predecessor completes, or when its parent opens. For a `calendar-day` journey that follows registration, that would open a cycle on the registration day (point 6). If the first visit comes on another day, it opens a new cycle. The first cycle stays behind as an empty visit that never happened. From phase 4, E3 closes it as incomplete. An `entry-step` group has the same problem. A Consultation that follows check-in would open when check-in completes, with history awaiting. The first history would then complete that awaiting history rather than start a Consultation. But the entry step should say when a cycle starts.
+*Decided:*
+- only an event for one of its steps opens a `calendar-day` or `entry-step` cycle. A predecessor completing, its parent opening, progressive instantiation and backfill open none. Work for a group with no cycle yet waits for that event. The one exception is an `entry-step` group's expected entry step (point 32);
+- an event for any of an `entry-step` group's steps opens its cycle 0 when there is none. So a BP taken before history opens it, without history: opening a cycle never creates the entry step. The history that follows starts cycle 1;
+- consequence: unless point 32 applies, history is not awaited, and never judged, until the Consultation starts.
 
 **27. What follows a group before completion exists.** *(E2 + F2; blocks phases 1 and 4)*
 Phases 1–3 never record a group as complete or closed (F2). Anything that follows a group, such as ANC visit 3 after visit 2, is created only when the group completes or closes (E2, point 7). Before phase 4 it would never be created. An event for one of its steps would open it with no due date.
@@ -266,7 +302,7 @@ Phase 1 has one instance per group, so each of these lookups takes cycle 0. Once
 *Accepted proposal:* wherever the matcher adds to a group's instance, it takes the group's latest cycle, inside its parent's latest cycle. Point 12 does the same for events. Point 18's shared instance, when there is one, comes first. The rules that open a new cycle (points 5, 6 and 20) are unchanged.
 
 **29. Steps with no due date.** *(E2 + E5; blocks phase 1)*
-A step created when its group opens takes the group's due date (point 8). Some groups open with no planned due date, such as a top-level group with no predecessor (E2), or ANC visit 2 reached before visit 1. Such a group gives its other entry steps no due date, and so no deadline rows. They never go `OVERDUE` or `MISSED`. Before groups, every step had a due date (design §2). Giving them `opened_at` instead would make a visit's second step `OVERDUE` minutes after its first. Design §7.1 describes that problem for groups.
+A step created when its group opens takes the group's due date (point 8). Some groups open with no planned due date, such as a top-level group with no predecessor (E2), or ANC visit 2 reached before visit 1. Such a group gives the other steps created with it no due date, and so no deadline rows. They never go `OVERDUE` or `MISSED`. Before groups, every step had a due date (design §2). Giving them `opened_at` instead would make a visit's second step `OVERDUE` minutes after its first. Design §7.1 describes that problem for groups.
 *Decided:* such steps stay unjudged, and show as pending, until E5 fills in a due date (phase 4), if it ever does. Every reader of `step_instance.due_date` must allow null (after phase 2).
 
 **30. A predecessor in a repeating group, seen from outside it.** *(B1 + B2 + F1; blocks phase 2)*
@@ -277,43 +313,14 @@ Point 18 reads a predecessor inside the instance it shares with the completed st
 Backfill creates the mandatory predecessors of the work observed so far. But it follows only the `relatedAction` edges between steps. A predecessor declared on a group is missed. Say ANC visit 2 follows registration, and a BP for visit 2 arrives before registration has been recorded. The BP step names no predecessor of its own. So registration is never backfilled and never goes `OVERDUE`, and the gap stays invisible. Declared on the BP step instead, registration would have been backfilled.
 *Decided:* a step also waits on what its enclosing groups wait on, at every level. Backfill follows those edges. So registration is backfilled when no row for it exists. It goes into its own group's instance if it has one, by points 28 and 30. Order violations still look only at a step's own immediate predecessors.
 
-**32. A group names its one entry step.** *(B2; phase 2)*
-Point 5 derives the entry steps from `relatedAction`, so one setting carries two meanings. Say a Consultation holds history and BP. BP has no `relatedAction` to history, because it can be taken first. BP is then an entry step too, and a second BP in the same visit opens a second Consultation. The only way to stop it is to make BP follow history. That also changes BP's order and due date.
-*Decided:* every `entry-step` group names exactly one entry step, in a `cycle-entry-step` extension whose `valueId` is the step's action id. It replaces point 5's derived entry steps:
-```json
-"extension": [
-  { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",   "valueCode": "entry-step" },
-  { "url": "http://openphc.org/fhir/StructureDefinition/cycle-entry-step", "valueId": "history" }
-]
-```
-Only the named step starts a new cycle. So BP can wait on nothing without a second BP opening a second Consultation. At load, the protocol service rejects:
-- an `entry-step` group without exactly one such extension;
-- a value that isn't a `valueId`;
-- a name that isn't a step inside the group with no predecessor inside it (point 35);
-- the extension on any other action.
-
-A step that waits on another in the group can't start a cycle. An `entry-step` protocol written before this must add the extension to load.
-
-**33. What opens an `entry-step` cycle.** *(B2 + E2; phase 2)*
-Point 26 kept opening an `entry-step` group in advance. The Consultation then opens when check-in completes, with history awaiting. The first history completes that awaiting history rather than starting a Consultation. The entry step should say when a cycle starts.
-*Decided:* only an event for one of its steps opens an `entry-step` cycle, as point 26 decided for `calendar-day`. A predecessor completing, its parent opening, progressive instantiation and backfill open none. Work for a group with no cycle yet waits for that event. An event for any of its steps opens cycle 0 when there is none, so a BP taken before history opens it. Each event for the entry step starts the next cycle, unless the latest cycle still awaits its entry step (point 34). Point 34 also lets an entry step's own `relatedAction` open cycle 0. Consequence: unless that applies, history is not awaited and is never judged until the Consultation starts.
-
-**34. An entry step that follows a step outside its group.** *(E2 + A4; phase 2)*
-With point 33, an entry step could have a `relatedAction` to a step outside its group, such as g2-step-1 2 days after step-1. That did nothing for its SLA. No instance existed until its event, which created it due on arrival. A patient who never came was never reported. The offset and `tolerance-days` looked as though they were in effect when they were not. Also, when BP opened cycle 0, the entry step was created awaiting there. The history that followed went to cycle 1, so the awaiting one went `MISSED` though it happened.
+**32. An entry step that follows a step outside its group.** *(E2 + A4; phase 2)*
+With point 26, an entry step could have a `relatedAction` to a step outside its group, such as g2-step-1 2 days after step-1. That did nothing for its SLA. No instance existed until its event, which created it due on arrival. A patient who never came was never reported. The offset and `tolerance-days` looked as though they were in effect when they were not. Also, when BP opened cycle 0, the entry step was created awaiting there. The history that followed went to cycle 1, so the awaiting one went `MISSED` though it happened.
 *Decided:*
 - when the step the entry step follows completes, progressive instantiation opens the group's cycle 0. It does so only if the group has none inside the parent's instance. It creates the entry step `NOT_STARTED`, due by its own offset. This applies only to cycle 0. A later cycle already holds its entry step. Backfill, a parent opening and other work still open none;
 - an event for the entry step completes an awaiting entry step in the latest cycle. Otherwise it starts the next cycle;
-- a cycle's opening never creates the entry step. A cycle opened by BP holds no history. The history that follows starts cycle 1, as the customer decided in point 33.
+- a cycle's opening never creates the entry step. A cycle opened by BP holds no history. The history that follows starts cycle 1, as the customer decided in point 26.
 
 Consequence: a step that follows the entry step, such as examination, may be recorded before it. It then backfills the entry step into its cycle. The entry step's event then completes it there rather than starting another cycle.
-
-**35. An entry step in a nested group.** *(B2; phase 2)*
-Point 32 allowed only a step directly in the group as its entry step. A `calendar-day` group starts a new cycle for an event for any step inside it, including steps in its nested groups. An `entry-step` group should be able to do the same.
-*Decided:*
-- the entry step can be any step inside the group, directly or in a nested group. It must still wait on nothing inside the group;
-- an event for it starts the group's next cycle. The nested groups around the step open fresh inside the new cycle;
-- opening a nested group never creates an enclosing group's entry step, as point 34 decided for the group's own;
-- a cycle "still awaits its entry step" when the entry step is `NOT_STARTED` anywhere inside it, nested groups included.
 
 ---
 
@@ -322,7 +329,7 @@ Point 32 allowed only a step directly in the group as its entry step. A `calenda
 | Phase | Delivers | Needs | Repos |
 |---|---|---|---|
 | 1. Foundation | One-off and nested groups, all schema changes, row choice; no completion or closure | A3, D1, D2, D7, E1, E2 (scenario 2), F1, F2; points 11, 12, 16, 18, 19, 25, 27, 29 | common-util, matcher, protocol |
-| 2. Visit-driven and nested repeats | The Rwanda journey | B1, B2, B3, F1; points 4–6, 23, 25, 26, 28 | common-util, matcher, protocol |
+| 2. Visit-driven and nested repeats | The Rwanda journey | B1, B2, B3, F1; points 4–6, 23, 25, 26, 28, 30–32 | common-util, matcher, protocol |
 | After 2. Reporting for production | The pipeline for the new table and columns; instances opened; the patient timeline | D5; point 15 | pipeline, insights, insights-ui |
 | 3. Scheduled repeats | The quarterly review | B4, E6, F1; points 1, 2, 17, 20, 23–25, 28 | common-util, matcher, protocol, insights, insights-ui |
 | 4. Completion, closure and group deadlines | Group completion and closure, what follows a group, the hand-off, group verdicts and deviations | A1, A2, B5, C1, E2 (scenario 1), E3, E5, F2; points 7–11, 18, 21, 22, 27 | common-util, matcher, step-sla, protocol |
@@ -351,7 +358,7 @@ Protocol completion (D3) is not part of this plan.
   - **New records and fields:** a `GroupMetadata` record (design §5.1); `StepMetadata.groupId`.
   - **Groups kept apart:** `flattenAction` branches on `groupingBehavior: logical-group`, so a group never becomes a `StepMetadata`.
   - **Dependency graph:** it accepts groups as nodes.
-  - **Helpers:** a group's direct members, everything inside it, and its entry members (A3-aware).
+  - **Helpers:** a group's direct members, everything inside it, and the members it creates when it opens (A3-aware).
 - Update the 36 `StepMetadata` constructor calls across `cce-common-util`, `cce-matcher-service` and `cce-protocol-service` (mostly tests).
 - `ParsedProtocolCache.ParsedProtocol` gains `groups()` and `group(id)`.
 - `validateGroups(PlanDefinition)`:
@@ -419,7 +426,7 @@ ALTER TABLE intelligence_event_log
 ```
 
 - **New `StepGroupService`:**
-  - **Opening a group instance:** insert the row, idempotently through the unique key. Then create its mandatory entry steps and open its entry nested groups. An optional group is never opened in advance (point 11).
+  - **Opening a group instance:** insert the row, idempotently through the unique key. Then create its first members: its mandatory steps and nested groups with no predecessor inside it. An optional group is never opened in advance (point 11).
   - **Locking:** opening runs under the `protocol_instance` lock, taken only when the protocol has groups.
 - `StepInstanceService`:
   - `createStep` takes the instance;
@@ -439,7 +446,7 @@ ALTER TABLE intelligence_event_log
 **Tests.**
 - **Parser:** groups never appear in `extractSteps`, `mustStepIds` or the step graph. A step nested two groups deep is indexed and matched.
 - **Load checks:** every rejection above.
-- **Opening:** reactive and progressive opening; entry steps only; deduplication within a group instance.
+- **Opening:** reactive and progressive opening; only the first members are created; deduplication within a group instance.
 - **No completion:** a group instance whose mandatory steps are all done keeps `completed_at` and `closed_at` null.
 - **No due date:** a step created with a group that has no planned due date has no due date and no deadline rows (point 29).
 - **A further row:** a second event for a step already completed in its instance adds a further completed row there, and opens no second instance (point 25).
@@ -458,14 +465,14 @@ ALTER TABLE intelligence_event_log
 
 **Load checks** (`validateGroups` in `cce-common-util`, run by the protocol service at load)
 - Accept the `cycle-boundary` extension, with `calendar-day` or `entry-step` (point 5).
-- A repeating group inside another repeating group uses `entry-step`; a `calendar-day` group there is rejected (point 23).
-- An `entry-step` group names its entry step in exactly one `cycle-entry-step` extension. The entry step is a step inside it, directly or in a nested group, with no predecessor inside it (points 32 and 35).
+- A `calendar-day` group inside another `calendar-day` group, at any depth, is rejected (point 23). Inside an `entry-step` group it is allowed.
+- An `entry-step` group names its entry step in exactly one `cycle-entry-step` extension. The entry step is a step inside it, directly or in a nested group, with no predecessor inside it (point 5).
 
 **Matcher.**
 - **`calendar-day`:** a new cycle opens for an event whose clinical day is later than the latest cycle's day. The day is taken in the configured zone (point 4). Every other event goes to the latest cycle (points 6 and 12). Only an event opens a cycle. A predecessor completing, or the parent opening, opens none (point 26).
-- **`entry-step`:** an event for any of its steps opens cycle 0 when there is none. Each event for the entry step starts the next cycle, unless the latest still awaits it (points 32–34). A cycle is opened only by an event, or by the completion of a step outside the group that the entry step follows (point 34). A parent opening opens none (point 33).
+- **`entry-step`:** an event for any of its steps opens cycle 0 when there is none. Each event for the entry step starts the next cycle, unless the latest still awaits it (points 5 and 32). A cycle is opened only by an event, or by the completion of a step outside the group that the entry step follows (point 32). A parent opening opens none (point 26).
 - **Where an event goes is decided before its row is looked for.** For a step in a group, this runs under the `protocol_instance` lock, from the top-level group down. At each level it takes the group's latest cycle inside its parent's, or a new cycle by the rules above. The event then completes the step's open row in that instance, or adds a further row there (point 25). Phase 1 looked for the open row first, outside the lock. On a new day it would complete the previous day's row instead of opening the new cycle.
-- **A later cycle has no due date.** Cycle 0 of a visit-driven group takes its planned due date, as any group does. A cycle opened because the patient came back has none (design §7.1, "usually none"). Its predecessor's completion + offset would already be past. So its entry steps other than the matched one are unjudged (point 29). The matched step is due when its event made it, as in phase 1.
+- **A later cycle has no due date.** Cycle 0 of a visit-driven group takes its planned due date, as any group does. A cycle opened because the patient came back has none (design §7.1, "usually none"). Its predecessor's completion + offset would already be past. So the steps created with it, other than the matched one, are unjudged (point 29). The matched step is due when its event made it, as in phase 1.
 - **Earlier cycles stay open.** Closing them as incomplete is E3, which comes with closure in phase 4 (F2).
 - **Inner repeats:** numbered within their parent instance.
 - **Instance lookups:** wherever the matcher adds to a group's instance, it takes the latest cycle, inside its parent's latest cycle, not cycle 0 (point 28).
@@ -479,14 +486,18 @@ ALTER TABLE intelligence_event_log
 - Point 6's backdated event goes to the latest visit.
 - A check-in around midnight UTC.
 - Two Consultations in one visit.
-- A `calendar-day` group inside a visit is rejected at load.
+- A `calendar-day` group inside a visit is rejected at load. One inside an `entry-step` group loads (point 23).
 - A `calendar-day` journey following registration opens no cycle until the first visit (point 26).
-- A Consultation following check-in opens no cycle until an event for one of its steps (point 33).
+- A Consultation following check-in opens no cycle until an event for one of its steps (point 26).
 - A repeated history opens a second Consultation; a repeated examination joins the current one (point 25).
 - Point 18's example: an examination left undone in an earlier visit raises no order violation in a later one.
 - Point 30's example: a prescription left undone in an earlier visit raises no order violation for a top-level treatment in a later one. A prescription missing from the later visit is backfilled into it.
 - Point 31's example: a BP for visit 2 recorded before registration backfills registration, and so does a diet assessment in visit 2's nested nutrition group.
-- A Consultation opened when check-in completes, and a backfilled step, join the latest visit (point 28).
+- A step that follows a step in the visit, and a backfilled step, join the latest visit (point 28).
+- A BP before any history opens the Consultation's cycle 0 without history. The history that follows starts cycle 1 (point 26).
+- An entry step that follows a step outside its group is created `NOT_STARTED` in cycle 0 when that step completes. Its first event completes it, and the next starts cycle 1 (point 32).
+- An entry step in a nested group starts the enclosing group's next cycle, with fresh nested groups inside it (point 5).
+- A `calendar-day` visit inside an `entry-step` pregnancy: each day is a visit in the latest pregnancy, and a new registration starts the next pregnancy, with its visits from cycle 0 (point 23).
 
 ### After phase 2: reporting for production
 

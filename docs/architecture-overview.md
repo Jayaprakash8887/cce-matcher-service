@@ -1015,13 +1015,14 @@ A group without `cycle-boundary` only ever gets the first trigger. So it has one
 
 Each instance is a cycle, numbered by `cycle_index` inside its parent's instance. So each visit's Consultation has its own cycle 0. Earlier cycles stay open: nothing closes them yet.
 
-A `calendar-day` group can't be inside a group that repeats, at any depth. A group inside a repeating group can only repeat by `entry-step`. The Protocol Service refuses any other `cycle-boundary` there at load (`PlanDefinitionParser.validateCycleBoundary`, plan point 23):
+A `calendar-day` group can't be inside another `calendar-day` group, at any depth. The Protocol Service refuses one there at load (`PlanDefinitionParser.validateCycleBoundary`, plan point 23). Inside an `entry-step` group it is allowed:
 
 | Outer group | Inner group | Loads? |
 |---|---|---|
 | `calendar-day` | `calendar-day`, directly inside it | No. The outer group already opens a new instance for each day the patient comes, and the inner group's cycles are numbered inside that instance. So the inner group only ever sees one day, and could never open a second cycle |
 | `calendar-day` | `calendar-day`, deeper, e.g. inside a nested group without `cycle-boundary` | No, for the same reason. The rule applies at every depth |
-| `entry-step` | `calendar-day`, at any depth | No. Plan point 23 sets one rule for every repeating parent: a group inside it repeats by `entry-step`. The rule was written for a visit, where every event falls on the same day. It makes no exception for an `entry-step` parent, although one of its cycles could span several days |
+| `entry-step` | `calendar-day`, at any depth | Yes. An `entry-step` cycle is an episode that can span many days, such as a pregnancy, and each day the patient comes is a visit in it. For example `pregnancy [entry-step: registration] { registration; visit [calendar-day] { bp } }`: see example 2a under **Examples** below |
+| `calendar-day` | `entry-step`, with a `calendar-day` group inside that | No. The outermost `calendar-day` group still makes every cycle inside it one day, whatever is in between |
 | no `cycle-boundary` | `calendar-day` | Yes. For example `Group 1 { Group 2 { Group 3 [calendar-day] { step 1 } } }`: see example 1 under **Examples** below |
 | `calendar-day` or `entry-step` | `entry-step`, at any depth | Yes. For example `Group 1 [calendar-day] { Group 2 { Group 3 [entry-step: step 1] { step 1 } } }`: see example 2 under **Examples** below |
 
@@ -1130,7 +1131,20 @@ Groups without `cycle-boundary` get one instance, however many times a step insi
 
 A new instance at one level means fresh instances below it, numbered from 0 again. Cycle numbers count inside the parent's instance.
 
-For the same reason, a `calendar-day` group inside a repeating group could never reach its own next day. The Protocol Service refuses one at load (`aGroupInsideARepeatingGroupCannotRepeatByCalendarDay`).
+For the same reason, a `calendar-day` group inside a `calendar-day` group could never reach its own next day. The Protocol Service refuses one at load (`aGroupInsideACalendarDayGroupCannotRepeatByCalendarDay`).
+
+*2a. Visits in an episode* (`VisitsInAnEpisode`). `pregnancy [entry-step: registration] { registration; visit [calendar-day] { bp } }`
+
+| Event | pregnancy | visit |
+|---|---|---|
+| registration, day 0 | none yet: opens c0 | not opened: only an event for one of its steps opens a `calendar-day` group |
+| bp, day 1 | bp is not its entry step: joins c0 | none yet: opens c0 |
+| bp, day 1, later | joins c0 | same day: joins c0 |
+| bp, day 30 | joins c0 | new calendar day: opens c1 |
+| registration, day 300 | registration is its entry step: opens c1 | |
+| bp, day 301 | joins c1 | none inside pregnancy c1: opens c0 there |
+
+Each pregnancy has its own visits, numbered from cycle 0.
 
 *3. Steps in a nested group that are not the entry step* (`EntryStepParent`). `Group 1 [entry-step: intake] { intake; Group 2 { step 1 } }`
 

@@ -831,7 +831,7 @@ The Protocol Service rejects at load:
 - a group with a `selectionBehavior` other than `all`
 - `tolerance-days` on an optional group or on a group with `cycle-boundary`
 - a `cycle-boundary` code other than `calendar-day` or `entry-step`
-- a `calendar-day` group inside another repeating group
+- a `calendar-day` group inside another `calendar-day` group, at any depth
 - an `entry-step` group that:
   - does not have exactly one `cycle-entry-step`
   - has no `valueId`
