@@ -641,21 +641,29 @@ Each `definitionCanonical` referenced in the PlanDefinition must have a register
 | Trigger — condition only (no data) | `trigger[]` with no `data[]` | Placed in `extractConditionOnlyTriggers()` |
 | Intelligence sub-action condition | `action[].condition[kind=applicability]` | `text/fhirpath`, `text/jsonlogic` |
 | Intelligence severity | `intelligence-severity` extension | `LOW`, `MEDIUM`, `HIGH`, `CRITICAL` |
-| Intelligence destination | `intelligence-destination` extension | Free-form string (routing destination for the Intelligence Service); this example uses `PATIENT`, `ASSIGNED_WORKER`, `SUPERVISOR`, `FACILITY` |
-| Deviation type (jsonlogic var) | `event.deviationType` | `"missed"`, `"order_violation"` — **not** `"overdue"`: reaching `sla_status = OVERDUE` raises no deviation, so an action conditioned on `"overdue"` never fires |
+| Intelligence destination | `intelligence-destination` extension | Free-form string (routing destination for the Intelligence Service). This example uses `PATIENT`, `ASSIGNED_WORKER`, `SUPERVISOR`, `FACILITY` |
+| Deviation type (jsonlogic var) | `event.deviationType` | `"missed"`, `"order_violation"`. **Not** `"overdue"`. Reaching `sla_status = OVERDUE` raises no deviation, so an action conditioned on `"overdue"` never fires |
 | Step tolerance window | `tolerance-days` extension | Integer (days) |
-| Required step | `requiredBehavior` | `must`, `could`, `must-unless-documented` — `must` is the only mandatory value, and the only one that may carry a deadline (see note below) |
+| Required step | `requiredBehavior` | `must`, `could`, `must-unless-documented`. `must` is the only mandatory value, and the only one that may carry a deadline (see note below) |
 | Step scheduling | `timingTiming.repeat` | `count`, `frequency`, `period`, `periodUnit` |
-| Action ordering | `relatedAction[].actionId` + `offsetDuration` | The step names its **prerequisite** — `offsetDuration` is how long after that prerequisite this step is due |
+| Action ordering | `relatedAction[].actionId` + `offsetDuration` | The step names its **prerequisite**. `offsetDuration` is how long after that prerequisite this step is due |
 | ActivityDefinition type | `kind` | `CommunicationRequest`, `Task`, `ServiceRequest` |
 | Canonical reference format | `definitionCanonical` | `<url>|<version>` |
-| Step group | `groupingBehavior` on a `step`-typed action with child actions | `logical-group` makes it a group (see [Step Groups](#step-groups)); `visual-group` and `sentence-group` keep it a plain step |
+| Step group | `groupingBehavior` on a `step`-typed action with child actions | `logical-group` makes it a group (see [Step Groups](#step-groups)). `visual-group` and `sentence-group` keep it a plain step |
 | Repeating by visit | `extension` `cycle-boundary` on a step group, `valueCode` `calendar-day` or `entry-step` | A new cycle each day the patient comes, or with each event for its entry step. Only an event opens such a group, never its predecessor or parent (see [Step Groups](#step-groups)) |
-| Entry step | `extension` `cycle-entry-step` on an `entry-step` group, required, exactly once, `valueId` a step's action id | The step that starts each cycle: one of the group's own steps, waiting on nothing inside it (see [Step Groups](#step-groups)) |
+| Entry step | `extension` `cycle-entry-step` on an `entry-step` group. Required, exactly once. `valueId` is a step's action id | The step that starts each cycle. It is a step inside the group, directly or in a nested group, and waits on nothing inside the group (see [Step Groups](#step-groups)) |
 
-`requiredBehavior` note: **only `must` is mandatory, and an absent value is not.** `must` drives the "must"-only predecessor backfill gating in `MandatoryStepBackfillService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`), and it is the only value that gets an SLA schedule: a step that is not `must` is never pre-created by progressive instantiation (only materialized on the fly if its own trigger fires), gets no `step_sla_state_transition` rows, and can therefore be neither `OVERDUE` nor `MISSED` — nothing was required of it, so there is nothing for it to breach. The one definition is `RequiredBehavior.isMandatory`.
+`requiredBehavior` note: **only `must` is mandatory, and an absent value is not.** `must` drives the "must"-only predecessor backfill gating in `MandatoryStepBackfillService.backfillMissingMandatorySteps` (via `PlanDefinitionParser.computeMustPredecessorSteps`). It is also the only value that gets an SLA schedule. A step that is not `must`:
 
-Consequently **`tolerance-days` on an action that is not `must` is rejected at load** by the Protocol Service: it would enforce nothing while looking as though it does. `must-unless-documented` is a valid FHIR code and is still accepted (see the `data-dictionary.md` `required_behavior` check constraint), but nothing branches on it — so it is optional like `could`, deadlines included.
+- is never pre-created by progressive instantiation (only materialized on the fly if its own trigger fires)
+- gets no `step_sla_state_transition` rows
+- can therefore be neither `OVERDUE` nor `MISSED`
+
+Nothing was required of it, so there is nothing for it to breach. The one definition is `RequiredBehavior.isMandatory`.
+
+Consequently **`tolerance-days` on an action that is not `must` is rejected at load** by the Protocol Service. It would enforce nothing while looking as though it does.
+
+`must-unless-documented` is a valid FHIR code and is still accepted (see the `data-dictionary.md` `required_behavior` check constraint). But nothing branches on it. So it is optional like `could`, deadlines included.
 
 ---
 
@@ -673,7 +681,13 @@ Consequently **`tolerance-days` on an action that is not `must` is rejected at l
 
 ## Step Groups
 
-A step group is a set of steps that belong together clinically, such as one antenatal-care visit. It is written as a `step`-typed action with `groupingBehavior: logical-group`, child actions and no trigger. The group itself is never matched to an event; only its steps are. How the Matcher Service opens and tracks a group is in [Architecture Overview §6.5](architecture-overview.md#65-step-groups).
+A step group is a set of steps that belong together clinically, such as one antenatal-care visit. It is written as a `step`-typed action with:
+
+- `groupingBehavior: logical-group`
+- child actions
+- no trigger
+
+The group itself is never matched to an event. Only its steps are. How the Matcher Service opens and tracks a group is in [Architecture Overview §6.5](architecture-overview.md#65-step-groups).
 
 ```json
 {
@@ -737,12 +751,12 @@ A step group is a set of steps that belong together clinically, such as one ante
 ```
 
 What this example does, given a mandatory `anc-registration` step elsewhere in the PlanDefinition:
-- **When registration completes,** the visit opens with a planned due date six weeks later. Its mandatory steps with no predecessor inside the group, BP and weight, are created with that due date, and with their own `tolerance-days` they can go `OVERDUE` and then `MISSED`.
-- **Counselling is optional,** so it is never created in advance: only when its own event arrives.
+- **When registration completes,** the visit opens with a planned due date six weeks later. Its mandatory steps with no predecessor inside the group are BP and weight. They are created with that due date. With their own `tolerance-days`, they can go `OVERDUE` and then `MISSED`.
+- **Counselling is optional,** so it is never created in advance. It is created only when its own event arrives.
 - **If a BP event arrives before registration,** the visit opens then, with no planned due date. Weight is then created without a due date or deadline, and is never judged.
 - **A second BP event** after the first is recorded as a further completed row in the same visit.
 
-**Repeating by visit.** A group repeats in cycles when it carries the `cycle-boundary` extension. A patient journey with one cycle per visit day, holding a Consultation that can happen twice in one visit (triggers left out):
+**Repeating by visit.** A group repeats in cycles when it carries the `cycle-boundary` extension. Below is a patient journey with one cycle per visit day. It holds a Consultation that can happen twice in one visit. Triggers are left out:
 
 ```json
 {
@@ -778,12 +792,12 @@ What this example does, given a mandatory `anc-registration` step elsewhere in t
 ```
 
 What this example does:
-- **The first event of a day** opens that day's visit, a new journey cycle; any other event that day joins it. Days are counted in the deployment's time zone (`CCE_CALENDAR_ZONE`). An event dated on an earlier day, arriving late, joins the latest visit.
-- **Check-in completing doesn't open the Consultation,** although it follows check-in: a group that repeats by visit opens only for an event for one of its steps. Until then history is not awaited or judged.
-- **Each history starts a Consultation.** The first in a visit starts the first, and a second history in that visit starts a second. An examination joins the current Consultation, as a further row if it already has one. An examination before any history in the visit starts the Consultation; examination follows history, so history is backfilled there, awaiting, and the history that follows completes it.
+- **The first event of a day** opens that day's visit, which is a new journey cycle. Any other event that day joins it. Days are counted in the deployment's time zone (`CCE_CALENDAR_ZONE`). An event dated on an earlier day that arrives late joins the latest visit.
+- **Check-in completing doesn't open the Consultation,** although it follows check-in. A group that repeats by visit opens only for an event for one of its steps. Until then, history is not awaited or judged.
+- **Each history starts a Consultation.** The first in a visit starts the first. A second history in that visit starts a second. An examination joins the current Consultation, as a further row if it already has one. An examination before any history in the visit starts the Consultation. Examination follows history, so history is backfilled there, awaiting. The history that follows completes it.
 - **Only cycle 0 has a planned due date.** A visit or Consultation opened because the patient came back has none, so its awaited steps are not judged.
 
-**The entry step.** An `entry-step` group must name its entry step, the step that starts each cycle, by action id in the `cycle-entry-step` extension. The Consultation above names history. The entry step decides only when a cycle starts, not the order of the steps, so another step can still wait on nothing. A Consultation where BP can be taken before history, but only history starts a new Consultation:
+**The entry step.** The entry step is the step that starts each cycle. An `entry-step` group must name it by action id in the `cycle-entry-step` extension. The Consultation above names history. The entry step decides only when a cycle starts. It does not decide the order of the steps, so another step can still wait on nothing. Below is a Consultation where BP can be taken before history, but only history starts a new Consultation:
 
 ```json
 {
@@ -806,9 +820,27 @@ What this example does:
 What this example does:
 - **A second BP** joins the current Consultation as a further completed BP, since BP is not the entry step.
 - **Each history starts the next Consultation.**
-- **A BP before any history** starts the first Consultation, without history: a cycle's opening never creates the entry step. The history that follows starts the next Consultation.
-- **An entry step with a `relatedAction` to a step outside the group,** such as history 2 days after check-in, is expected: when that step completes, the first Consultation opens with history `NOT_STARTED`, due by its offset, and the first history completes it.
+- **A BP before any history** starts the first Consultation, without history. A cycle's opening never creates the entry step. The history that follows starts the next Consultation.
+- **An entry step with a `relatedAction` to a step outside the group,** such as history 2 days after check-in, is expected. When that step completes, the first Consultation opens with history `NOT_STARTED`, due by its offset. The first history completes it.
 - **The extension is required, exactly once.** An `entry-step` group without it, or with it more than once, is refused at load.
-- **The entry step must be one of the group's own steps, waiting on nothing inside it.** A step in a nested group, a step outside the group, or a step with a `relatedAction` to another step in the group is refused at load.
+- **The entry step must be a step inside the group, waiting on nothing inside it.** It can be directly in the group or in one of its nested groups. A group, a step outside the group, or a step with a `relatedAction` to another action in the group is refused at load.
 
-The Protocol Service rejects at load a group that has a trigger or no step, a `selectionBehavior` other than `all`, or `tolerance-days` on an optional group or on a group with `cycle-boundary`. It rejects a `cycle-boundary` code other than `calendar-day` or `entry-step`, and a `calendar-day` group inside another repeating group. It rejects an `entry-step` group without exactly one `cycle-entry-step`, with no `valueId`, or naming anything but a step directly in the group with no predecessor inside it, and `cycle-entry-step` on any other action. It also refuses, until they are built, `timing` on a group (scheduled repeats), `tolerance-days` on a group (group deadlines), a `fire-event` child of a group, and any action that follows a group.
+The Protocol Service rejects at load:
+
+- a group that has a trigger or no step
+- a group with a `selectionBehavior` other than `all`
+- `tolerance-days` on an optional group or on a group with `cycle-boundary`
+- a `cycle-boundary` code other than `calendar-day` or `entry-step`
+- a `calendar-day` group inside another repeating group
+- an `entry-step` group that:
+  - does not have exactly one `cycle-entry-step`
+  - has no `valueId`
+  - names anything but a step inside the group, directly or in a nested group, with no predecessor inside the group
+- `cycle-entry-step` on any other action
+
+It also refuses the following, until they are built:
+
+- `timing` on a group (scheduled repeats)
+- `tolerance-days` on a group (group deadlines)
+- a `fire-event` child of a group
+- any action that follows a group

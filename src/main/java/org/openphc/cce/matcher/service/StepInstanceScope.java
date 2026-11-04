@@ -156,7 +156,7 @@ public class StepInstanceScope {
     }
 
     /** Whether {@code groupInstance} is {@code scope} or nested somewhere inside it. */
-    private static boolean isInside(StepGroupInstance groupInstance, StepGroupInstance scope) {
+    static boolean isInside(StepGroupInstance groupInstance, StepGroupInstance scope) {
         for (StepGroupInstance enclosing = groupInstance; enclosing != null;
              enclosing = enclosing.getParentGroupInstance()) {
             if (Objects.equals(enclosing.getId(), scope.getId())) {

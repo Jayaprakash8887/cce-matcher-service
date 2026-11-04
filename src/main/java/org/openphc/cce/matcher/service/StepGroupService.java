@@ -260,13 +260,25 @@ public class StepGroupService {
         };
     }
 
-    /** Whether {@code groupInstance} has a step instance of the group's entry step still awaiting its event. */
+    /**
+     * Whether {@code groupInstance} has a step instance of the group's entry step still awaiting its event,
+     * in the instance itself or in a nested group's instance inside it.
+     */
     private static boolean awaitsEntryStep(Enrollment enrollment, PlanDefinitionParser.GroupMetadata groupMetadata,
                                            StepGroupInstance groupInstance) {
         return enrollment.stepInstances().stream()
                 .anyMatch(stepInstance -> groupMetadata.entryStepId().equals(stepInstance.getActionId())
                         && stepInstance.getStepStatus() == StepStatus.NOT_STARTED
-                        && StepInstanceScope.isDirectlyIn(stepInstance, groupInstance));
+                        && StepInstanceScope.isInside(stepInstance.getStepGroupInstance(), groupInstance));
+    }
+
+    /**
+     * Whether {@code stepMetadata} is the entry step of its own group or of a group around it. Opening a group
+     * instance never creates such a step: its own event creates it, or the work that expects it.
+     */
+    private static boolean isAnEntryStep(Enrollment enrollment, PlanDefinitionParser.StepMetadata stepMetadata) {
+        return enrollment.groupsFromInnermostOut(stepMetadata.groupId()).stream()
+                .anyMatch(groupMetadata -> stepMetadata.id().equals(groupMetadata.entryStepId()));
     }
 
     /**
@@ -351,8 +363,8 @@ public class StepGroupService {
      * Open an instance of a group and create what it holds from the start: its mandatory members with
      * no predecessor inside the group. Steps are due at the instance's due date; nested groups open their
      * first instance, except a group that repeats by visit, which only an event opens. An {@code entry-step}
-     * group's entry step is never created here: its own event creates it, or the work that expects it,
-     * with its own due date; a cycle opened by another of its steps doesn't await it. Later members
+     * group's entry step, in the group or a nested group, is never created here (see {@link #isAnEntryStep}):
+     * a cycle opened by another of its steps doesn't await it. Later members
      * arrive through progressive instantiation, with the due dates their own {@code relatedAction}
      * offsets give them. The caller has checked that this cycle doesn't exist.
      *
@@ -372,9 +384,9 @@ public class StepGroupService {
                 enrollment.protocol().dependencyGraph());
         for (PlanDefinitionParser.StepMetadata memberStepMetadata : membersCreatedOnOpen.steps()) {
             // The matched step is left to its event, which creates it due when the event arrived: created
-            // here, it would take this instance's due date, often unknown, and never be judged.
-            if (!memberStepMetadata.id().equals(matchedStepId)
-                    && !memberStepMetadata.id().equals(groupMetadata.entryStepId())) {
+            // here, it would take this instance's due date, often unknown, and never be judged. An entry step
+            // is left to its event, or to the work that expects it.
+            if (!memberStepMetadata.id().equals(matchedStepId) && !isAnEntryStep(enrollment, memberStepMetadata)) {
                 enrollment.add(stepCreationService.createStepRows(enrollment.protocolInstance(), memberStepMetadata,
                         groupInstance.getDueDate(), groupInstance));
             }

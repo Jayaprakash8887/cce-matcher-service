@@ -675,6 +675,45 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
+    class EntryStepInANestedGroup {
+
+        /** Group 1 repeating by entry step, of intake and group 2; its entry step, step 1, is in group 2. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent group1 =
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "group-1", "must"), "entry-step"), "step-1");
+            step(group1.addAction(), "intake", "must");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
+            step(group2.addAction(), "step-1", "must");
+            use(pd);
+        }
+
+        @Test
+        void eachStep1StartsGroup1sNextCycle_withAFreshGroup2InsideIt() {
+            record("step-1", T0);
+            record("step-1", T0.plusMinutes(10));
+
+            List<StepGroupInstance> group1Cycles = cyclesOf("group-1", null);
+            assertEquals(2, group1Cycles.size());
+            assertEquals(1, cyclesOf("group-2", group1Cycles.get(0)).size());
+            assertEquals(1, cyclesOf("group-2", group1Cycles.get(1)).size());
+        }
+
+        @Test
+        void intakeFirst_opensCycle0_withoutStep1_andStep1StartsCycle1() {
+            record("intake", T0);
+
+            assertEquals(1, cyclesOf("group-2", cyclesOf("group-1", null).get(0)).size(), "group 2 opens with group 1");
+            assertTrue(rowsFor("step-1").isEmpty(), "opening group 2 leaves group 1's entry step to its event");
+
+            record("step-1", T0.plusMinutes(10));
+
+            assertEquals(2, cyclesOf("group-1", null).size());
+        }
+    }
+
+    @Nested
     class EntryStepParent {
 
         /** Group 1 repeating by entry step, holding its entry step intake and group 2, which holds step 1. */

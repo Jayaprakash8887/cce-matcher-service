@@ -11,15 +11,15 @@
 | **PostgreSQL** | 16+ | Yes | Primary database |
 | **Apache Kafka** | 3.x | Yes | Message broker |
 | **Git** | 2.x | Yes | Version control |
-| **`cce-common-util`** | matching branch | Yes | Sibling checkout — shared entities, enums, Kafka contracts and FHIR layer, wired in via `includeBuild` |
+| **`cce-common-util`** | matching branch | Yes | Sibling checkout, wired in via `includeBuild`. Holds the shared entities, enums, Kafka contracts and FHIR layer |
 
 ## 2. Quick Start
 
 ### 2.1 Clone & Build
 
 This repo is one half of a composite Gradle build. `settings.gradle` declares
-`includeBuild '../cce-common-util'`, so **the shared module must be checked out as a sibling directory**
-— the build cannot resolve `org.openphc.cce:cce-common-util` otherwise.
+`includeBuild '../cce-common-util'`. So **the shared module must be checked out as a sibling directory**.
+Otherwise the build cannot resolve `org.openphc.cce:cce-common-util`.
 
 ```bash
 # Both repos side by side — the relative path in settings.gradle depends on it
@@ -39,7 +39,7 @@ workspace/
 └── cce-matcher-service/   # this repo  → settings.gradle: includeBuild '../cce-common-util'
 ```
 
-There is no publish step: a change in `cce-common-util` is compiled into the next build of this service
+There is no publish step. A change in `cce-common-util` is compiled into the next build of this service
 directly. If the build fails with `Could not resolve org.openphc.cce:cce-common-util`, the sibling
 checkout is missing or sits at a different relative path.
 
@@ -133,9 +133,9 @@ Configured via `cce.kafka.topics.*` in `application.yml`:
 
 | Property | Value | Description |
 |---|---|---|
-| `spring.jpa.hibernate.ddl-auto` | `none` | Schema managed entirely by Flyway; Hibernate performs no DDL or validation |
+| `spring.jpa.hibernate.ddl-auto` | `none` | Schema managed entirely by Flyway. Hibernate performs no DDL or validation |
 | `spring.jpa.open-in-view` | `false` | Prevents lazy loading in controllers (best practice) |
-| `hibernate.dialect` | `PostgreSQLDialect` | Not set explicitly in `application.yml` — auto-detected by Spring Boot from the PostgreSQL driver |
+| `hibernate.dialect` | `PostgreSQLDialect` | Not set explicitly in `application.yml`. Auto-detected by Spring Boot from the PostgreSQL driver |
 | `hibernate.jdbc.time_zone` | `UTC` | All timestamps in UTC |
 
 ### 3.4 Flyway
@@ -154,21 +154,21 @@ One chain serves both a new database and one carried over from the pre-split mon
 | Migration | On a new database | On a 1.x (pre-split) `ccedb` |
 |---|---|---|
 | `V1__initial_schema.sql` | Creates the whole 2.0.0 schema | **Skipped** — recorded as already applied |
-| `V2__upgrade_from_monolith_schema.sql` | No-op — every block is guarded on the presence of the 1.x shape | Performs the transformation (splits `state` into `step_status`/`sla_status`, moves the deadlines into `step_sla_state_transition`, renames `compliance_event_log`) |
-| `V3__met_condition_reached.sql` | Admits the `MET_CONDITION_REACHED` transition type, seeds a row for every step already completed on time and not yet judged, and drops the index the retired on-time sweep read | Same — the seeded rows are whatever V2 has just left unjudged |
+| `V2__upgrade_from_monolith_schema.sql` | No-op. Every block is guarded on the presence of the 1.x shape | Performs the transformation. It splits `state` into `step_status`/`sla_status`. It moves the deadlines into `step_sla_state_transition`. It renames `compliance_event_log` |
+| `V3__met_condition_reached.sql` | Admits the `MET_CONDITION_REACHED` transition type. Seeds a row for every step already completed on time and not yet judged. Drops the index the retired on-time sweep read | Same. The seeded rows are whatever V2 has just left unjudged |
 | `V4__optional_steps_have_no_schedule.sql` | Deletes every transition row belonging to a step that is not `must` | Same, and it is what removes the optional-step rows V2's backfill seeds |
 
-**New database:** leave `CCE_FLYWAY_BASELINE_VERSION` at `0`. V1 builds the schema, V2 finds nothing to
-change, V3 and V4 find nothing to seed or delete.
+**New database:** leave `CCE_FLYWAY_BASELINE_VERSION` at `0`. V1 builds the schema. V2 finds nothing to
+change. V3 and V4 find nothing to seed or delete.
 
-**Upgrading an existing 1.x database:** set `CCE_FLYWAY_BASELINE_VERSION=1` for that one deployment, so
-Flyway records V1 as applied and runs V2 onward. Return it to `0` afterwards. This cannot be auto-detected:
-by the time this service migrates, the Protocol Service has already created its tables, so an
-"is the schema empty?" check would never be true here.
+**Upgrading an existing 1.x database:** set `CCE_FLYWAY_BASELINE_VERSION=1` for that one deployment.
+Flyway then records V1 as applied and runs V2 onward. Return it to `0` afterwards. This cannot be
+auto-detected. By the time this service migrates, the Protocol Service has already created its tables.
+So an "is the schema empty?" check would never be true here.
 
 > **Precondition for the upgrade path:** the source database must already be at monolith `V9` or later.
-> `V9` reversed the direction of `relatedAction` inside `protocol_definition.definition`, and `V2` does
-> not repeat that work — the JSON is data this service does not own.
+> `V9` reversed the direction of `relatedAction` inside `protocol_definition.definition`. `V2` does
+> not repeat that work, because the JSON is data this service does not own.
 
 The repo-root [`migration/`](../migration/) folder holds the runnable equivalents (`run-upgrade.sh`,
 `verify.sql`) for operating that upgrade outside application startup.
@@ -180,7 +180,7 @@ The repo-root [`migration/`](../migration/) folder holds the runnable equivalent
 | `management.endpoints.web.exposure.include` | `health,info,prometheus,metrics` | Exposed actuator endpoints |
 | `management.metrics.tags.application` | `cce-matcher-service` | Common metric tag |
 
-There is no tracing configuration — no tracing backend is on the classpath. Correlation is via the MDC
+There is no tracing configuration. No tracing backend is on the classpath. Correlation is via the MDC
 `correlationId` in log output.
 
 ## 4. Project Structure
@@ -231,7 +231,7 @@ workspace/
 
 ## 5. Database Setup
 
-All CCE services share the same database (`ccedb`) on the PostgreSQL instance deployed by the CCE Collector Service (port `5433`, user `cce_user`). Each service owns its own tables — Flyway migrations are namespaced to avoid conflicts.
+All CCE services share the same database (`ccedb`). It lives on the PostgreSQL instance deployed by the CCE Collector Service (port `5433`, user `cce_user`). Each service owns its own tables. Flyway migrations are namespaced to avoid conflicts.
 
 ### 5.1 No Separate Database Creation Needed
 
@@ -239,7 +239,7 @@ The database is created by the collector service's Docker Compose. The matcher s
 
 ### 5.2 Flyway Migrations
 
-Migrations are applied automatically on application startup via Spring Boot's Flyway autoconfiguration. There is no Flyway Gradle plugin in `build.gradle` (only the `flyway-core` and `flyway-database-postgresql` libraries used at runtime), so `flywayMigrate` / `flywayInfo` Gradle tasks are **not** available. To inspect or run migrations manually, use the Flyway CLI or psql directly against the `flyway_schema_history_matcher` table:
+Migrations are applied automatically on application startup via Spring Boot's Flyway autoconfiguration. There is no Flyway Gradle plugin in `build.gradle`. It has only the `flyway-core` and `flyway-database-postgresql` libraries used at runtime. So `flywayMigrate` / `flywayInfo` Gradle tasks are **not** available. To inspect or run migrations manually, use the Flyway CLI or psql directly against the `flyway_schema_history_matcher` table:
 
 ```bash
 # Inspect applied migrations directly
@@ -395,7 +395,7 @@ LOGGING_LEVEL_ORG_OPENPHC_CCE_MATCHER=DEBUG java -jar build/libs/cce-matcher-ser
 |---|---|---|
 | `Connection refused: localhost:5433` | PostgreSQL not running | Start collector service infrastructure: `cd cce-collector-service && docker compose up -d` |
 | `Connection refused: localhost:9092` | Kafka not running | Start Kafka or Docker container |
-| `Flyway migration failed` | Schema conflicts | Check migration scripts; there is no Flyway Gradle plugin in this project, so reset manually (dev only) by dropping the affected tables and `flyway_schema_history_matcher` rows via psql |
+| `Flyway migration failed` | Schema conflicts | Check migration scripts. There is no Flyway Gradle plugin in this project. So reset manually (dev only) by dropping the affected tables and `flyway_schema_history_matcher` rows via psql |
 | `Deserialization error` | Message format mismatch | Check producer serialization, trusted packages |
 | Build fails with `javac not found` | JDK not installed (JRE only) | Install JDK 21 or use Docker build |
 
@@ -427,6 +427,6 @@ kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
 
 ## 12. Security Notes for Development
 
-This service exposes no application API, so there is nothing to authenticate. Its inputs are Kafka topics and the shared database; the only HTTP surface is `/actuator` (health and Prometheus).
+This service exposes no application API, so there is nothing to authenticate. Its inputs are Kafka topics and the shared database. The only HTTP surface is `/actuator` (health and Prometheus).
 
-Note that it holds write access to the shared `ccedb` and reads protocol definitions written by another service — so database credentials remain the sensitive material here, not request-level auth.
+Note that it holds write access to the shared `ccedb`. It also reads protocol definitions written by another service. So database credentials remain the sensitive material here, not request-level auth.

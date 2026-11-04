@@ -4,9 +4,9 @@
 
 The CCE Matcher Service uses **Apache Kafka** for asynchronous, event-driven communication with other CCE platform services. All messages follow the **CloudEvents v1.0** specification.
 
-It consumes one topic and produces one. Time-based SLA transitions do **not** arrive over Kafka: Matcher
-writes each step's schedule into `step_sla_state_transition`, and the service that evaluates those rows
-applies the transition and records the deviation itself. See
+It consumes one topic and produces one. Time-based SLA transitions do **not** arrive over Kafka. Instead,
+Matcher writes each step's schedule into `step_sla_state_transition`. The service that evaluates those
+rows applies the transition and records the deviation itself. See
 [Architecture Overview §1.1](architecture-overview.md#11-sla-transition-evaluation-contract).
 
 ```mermaid
@@ -123,7 +123,10 @@ Spring Kafka's `DefaultErrorHandler` is configured on the container factory with
 | `max-attempts` | `3` | Number of retry attempts before DLQ |
 | `backoff-interval-ms` | `1000` | Fixed delay between retries (milliseconds) |
 
-> **`prod` profile overrides** (`application-prod.yml`): `max-attempts: 5` and `backoff-interval-ms: 2000` (both env-overridable via `KAFKA_RETRY_MAX_ATTEMPTS` / `KAFKA_RETRY_BACKOFF_MS`). Listener `concurrency` is also raised to `5` (`KAFKA_CONCURRENCY`) in `prod`.
+> **`prod` profile overrides** (`application-prod.yml`):
+> - `max-attempts: 5` (env-overridable via `KAFKA_RETRY_MAX_ATTEMPTS`)
+> - `backoff-interval-ms: 2000` (env-overridable via `KAFKA_RETRY_BACKOFF_MS`)
+> - Listener `concurrency` is also raised to `5` (`KAFKA_CONCURRENCY`) in `prod`
 
 ### 3.4 Topic Provisioning
 
@@ -170,7 +173,7 @@ spring.kafka:
 
 The primary message envelope for all inbound clinical events, following [CloudEvents v1.0](https://cloudevents.io/).
 
-All Kafka messages use **CloudEvents spec field names (lowercase)** — no camelCase translation is performed. This matches the Collector Service's end-to-end field name preservation.
+All Kafka messages use **CloudEvents spec field names (lowercase)**. No camelCase translation is performed. This matches the Collector Service's end-to-end field name preservation.
 
 ```json
 {
@@ -224,7 +227,7 @@ All Kafka messages use **CloudEvents spec field names (lowercase)** — no camel
 | `type` | Yes | String | Event type. Validated by Collector and emitter adaptors. |
 | `specversion` | Yes | String | Always `"1.0"` |
 | `subject` | Yes | String | Patient UPID (e.g., `260225-0002-5501`) — also the Kafka message key. Always present (guaranteed by Collector). |
-| `time` | Yes | String (ISO 8601) | Envelope timestamp (emitter/adaptor transmission time; server-generated if absent). Always present. Used as the fallback completion time when clinical occurrence time cannot be extracted from the payload — see [Architecture §4.2](architecture-overview.md#42-clinical-event-time-extraction). |
+| `time` | Yes | String (ISO 8601) | Envelope timestamp (emitter/adaptor transmission time; server-generated if absent). Always present. Used as the fallback completion time when clinical occurrence time cannot be extracted from the payload. See [Architecture §4.2](architecture-overview.md#42-clinical-event-time-extraction). |
 | `datacontenttype` | Yes | String | MIME type of data field (`application/fhir+json` or `application/json`). Always present (Collector defaults to `application/fhir+json`). |
 | **CCE Extensions:** | | | |
 | `correlationid` | Yes | String | Distributed trace correlation ID. Always present (Collector generates `corr-<uuid>` if absent). |
@@ -233,13 +236,13 @@ All Kafka messages use **CloudEvents spec field names (lowercase)** — no camel
 | `protocoldefinitionid` | No | String (UUID) | Pre-populated if source knows the target protocol (usually null — Matcher Service resolves) |
 | `actionid` | No | String | Pre-populated if source knows the target action/step (usually null — Matcher Service resolves) |
 | `facilityid` | No | String | Healthcare facility FOSA ID (e.g., `0002`) |
-| `facilityname` | No | String | Healthcare facility display name (e.g., `Kigali South Health Post`). Preferred over the FHIR body's reference `display` field when present — see [Data Dictionary](data-dictionary.md#auto-population-behaviour). |
+| `facilityname` | No | String | Healthcare facility display name (e.g., `Kigali South Health Post`). Preferred over the FHIR body's reference `display` field when present. See [Data Dictionary](data-dictionary.md#auto-population-behaviour). |
 | **Payload:** | | | |
 | `data` | Yes | Map | Event payload — FHIR R4 resource (when `datacontenttype` = `application/fhir+json`) or valid JSON object (when `datacontenttype` = `application/json`). Always present (guaranteed by Collector). |
 
 > **No CloudEvents envelope on this topic.** Unlike `cce.events.inbound`, `IntelligenceTriggerEvent` is
 > a plain domain message with no `type`/`specversion` attributes. Consumers route on `actionType`,
-> `severity` and `intelligenceDestination`, and correlate via `intelligenceEventId`.
+> `severity` and `intelligenceDestination`. They correlate via `intelligenceEventId`.
 
 #### Payload Content Types
 
@@ -252,7 +255,12 @@ All Kafka messages use **CloudEvents spec field names (lowercase)** — no camel
 
 ### 5.2 IntelligenceTriggerEvent (Outbound — `cce.intelligence.triggers`)
 
-Published when an intelligence action fires — triggered by deviation detection (MISSED/ORDER_VIOLATION) or step completion when the step's PlanDefinition action has nested intelligence actions with matching conditions.
+Published when an intelligence action fires. Two things trigger it:
+
+1. deviation detection (MISSED/ORDER_VIOLATION)
+2. step completion
+
+It fires only when the step's PlanDefinition action has nested intelligence actions with matching conditions.
 
 ```json
 {
@@ -288,7 +296,7 @@ Published when an intelligence action fires — triggered by deviation detection
 | `actionId` | String | Protocol definition action ID |
 | `protocolCanonical` | String | Protocol `url\|version` |
 | `detectedAt` | OffsetDateTime | Detection timestamp |
-| `eventPayload` | JsonNode | Original FHIR resource payload from the inbound CloudEvent. Present for event-driven completions; `null` for the deviation path (there is no inbound event behind a deviation). |
+| `eventPayload` | JsonNode | Original FHIR resource payload from the inbound CloudEvent. Present for event-driven completions. `null` for the deviation path, because there is no inbound event behind a deviation. |
 
 **Kafka Key:** `intelligenceEventId` (ensures unique partitioning per action execution)
 
@@ -301,7 +309,17 @@ Published when an intelligence action fires — triggered by deviation detection
 | Step completed with `slaStatus=OVERDUE` or `MISSED` (i.e. late) |
 
 
-> **Intelligence event publishing lifecycle:** When a deviation is detected or a step completed, the `IntelligenceActionEvaluator` extracts intelligence actions from the step's PlanDefinition, evaluates each action's condition (JSONLogic/FHIRPath) against the step's runtime state, and publishes an `IntelligenceTriggerEvent` for each matching action. An `IntelligenceEventLog` record stores the complete event payload, evaluation context (trigger reason, deviation, step action ID, expression, and runtime variables), and publish status. See [Architecture Overview §6.3](architecture-overview.md#63-intelligence-action-evaluation) for the full pipeline.
+> **Intelligence event publishing lifecycle:** When a deviation is detected or a step completed, the `IntelligenceActionEvaluator`:
+> 1. extracts intelligence actions from the step's PlanDefinition
+> 2. evaluates each action's condition (JSONLogic/FHIRPath) against the step's runtime state
+> 3. publishes an `IntelligenceTriggerEvent` for each matching action
+>
+> An `IntelligenceEventLog` record stores:
+> - the complete event payload
+> - the evaluation context (trigger reason, deviation, step action ID, expression, and runtime variables)
+> - the publish status
+>
+> See [Architecture Overview §6.3](architecture-overview.md#63-intelligence-action-evaluation) for the full pipeline.
 
 ---
 
@@ -335,10 +353,16 @@ public void consume(CloudEventMessage event) {
 
 Each inbound event triggers two independent operations before the offset is committed:
 
-1. **Facility registration** (`FacilityService.upsertFacility`) — best-effort reference-data upsert of the event's `facilityid`. Runs in its own transaction, outside `MatcherEngine`'s. Failures are non-fatal: logged as a warning, and matcher processing continues — a transient error on the facility reference table must not cause the event to be retried or routed to the DLQ.
+1. **Facility registration** (`FacilityService.upsertFacility`) — best-effort reference-data upsert of the event's `facilityid`. Runs in its own transaction, outside `MatcherEngine`'s. Failures are non-fatal. They are logged as a warning, and matcher processing continues. A transient error on the facility reference table must not cause the event to be retried or routed to the DLQ.
 2. **Matcher processing** (`MatcherEngine.processInboundEvent`) — protocol matching, enrolment, and step progression. Failures here are fatal and propagate to the error handler.
 
-**Behavior on failure:** Exception from matcher processing propagates to `DefaultErrorHandler` → retries with backoff → routes to `cce.events.inbound.dlq` after exhausting retries. Offset is committed automatically on success (`AckMode.RECORD`).
+**Behavior on failure:**
+
+1. An exception from matcher processing propagates to `DefaultErrorHandler`.
+2. The handler retries with backoff.
+3. After exhausting retries, it routes the event to `cce.events.inbound.dlq`.
+
+Offset is committed automatically on success (`AckMode.RECORD`).
 
 ## 7. Producer Implementations
 
@@ -376,7 +400,7 @@ public class IntelligenceTriggerProducer {
 - **Fire-and-forget:** Publish failures are logged but do not fail the main matcher transaction
 - **Kafka key:** `intelligenceEventId` (same key documented in §5.3) — ensures unique partitioning per action execution
 - **Idempotency:** Producer-level idempotency (`enable.idempotence=true`) prevents duplicate publishes within a partition
-- **Metrics:** `cce.events.intelligence.published` counter incremented on successful publish; `cce.intelligence.publish.duration` timer records publish latency
+- **Metrics:** `cce.events.intelligence.published` counter incremented on successful publish. `cce.intelligence.publish.duration` timer records publish latency.
 
 ## 8. Ordering & Delivery Guarantees
 
@@ -384,7 +408,7 @@ public class IntelligenceTriggerProducer {
 |---|---|
 | **At-least-once delivery** | `AckMode.RECORD` + `DefaultErrorHandler` + no auto-commit |
 | **Idempotency (inbound events)** | `(cloudeventsId, source)` deduplication in matcher_event_log |
-| **Idempotency (deviations)** | A redelivered event is caught by the inbound-event check above before it reaches `completeStepInstance`, and `completeStepInstance` refuses a step that is not `NOT_STARTED`, so an `ORDER_VIOLATION` is recorded once per step. The `(step_instance_id, deviation_type)` unique constraint on `deviation` is the backstop: a duplicate fails the event, which is retried and then dead-lettered, rather than publishing a second intelligence event |
+| **Idempotency (deviations)** | A redelivered event is caught by the inbound-event check above before it reaches `completeStepInstance`. `completeStepInstance` refuses a step that is not `NOT_STARTED`. So an `ORDER_VIOLATION` is recorded once per step. The `(step_instance_id, deviation_type)` unique constraint on `deviation` is the backstop. A duplicate fails the event. The event is retried and then dead-lettered, rather than publishing a second intelligence event. |
 | **Idempotency (producer)** | `enable.idempotence=true` on producer |
 | **Ordering (per partition)** | Key-based routing ensures ordering per action execution |
 | **Transactional reads** | `isolation.level=read_committed` prevents reading uncommitted |

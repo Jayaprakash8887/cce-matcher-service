@@ -49,7 +49,7 @@ All configuration is externalized via environment variables. Defaults are provid
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
-| `SERVER_PORT` | `8091` (`8080` in Docker) | No | HTTP server port. The Docker image sets `SERVER_PORT=8080` to match its `EXPOSE`/`HEALTHCHECK`, so containerised deployments need no override; set it only to move off 8080, and change the published port with it |
+| `SERVER_PORT` | `8091` (`8080` in Docker) | No | HTTP server port. The Docker image sets `SERVER_PORT=8080` to match its `EXPOSE`/`HEALTHCHECK`. So containerised deployments need no override. Set it only to move off 8080, and change the published port with it |
 | `SPRING_PROFILES_ACTIVE` | — | Yes (prod) | Set to `prod` for production |
 
 ### Database
@@ -57,7 +57,7 @@ All configuration is externalized via environment variables. Defaults are provid
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `DB_HOST` | `localhost` | Yes | PostgreSQL host (shared with collector service) |
-| `DB_PORT` | `5432` | No | PostgreSQL port (standard PostgreSQL default in code — set to `5433` when connecting to the shared instance deployed by the collector service) |
+| `DB_PORT` | `5432` | No | PostgreSQL port. The default in code is the standard PostgreSQL port. Set it to `5433` when connecting to the shared instance deployed by the collector service |
 | `DB_NAME` | `ccedb` | No | Shared database name (all CCE services) |
 | `DB_USERNAME` | `cce_user` | Yes | Database username (shared with collector service) |
 | `DB_PASSWORD` | `cce_pass` | Yes | Database password (shared with collector service) |
@@ -82,19 +82,19 @@ All configuration is externalized via environment variables. Defaults are provid
 | Variable | Default | Required | Description |
 |---|---|---|---|
 | `CCE_PARSED_PROTOCOL_CACHE_SIZE` | `256` | No | Max parsed protocol definitions (flattened steps + dependency graph) held in memory |
-| `CCE_PROTOCOL_REFRESH_INTERVAL_MS` | `60000` | No | How often to reconcile the in-memory protocol caches against definitions written by the CCE Protocol Service. Upper bound on how long a newly published protocol takes to start matching its condition-only triggers, and on how long a retired one keeps doing so |
+| `CCE_PROTOCOL_REFRESH_INTERVAL_MS` | `60000` | No | How often to reconcile the in-memory protocol caches against definitions written by the CCE Protocol Service. It is the upper bound on how long a newly published protocol takes to start matching its condition-only triggers. It is also the upper bound on how long a retired one keeps doing so |
 | `CCE_PUBLISH_CONFIRM_TIMEOUT_MS` | `5000` | No | How long to wait for Kafka to acknowledge an intelligence trigger before recording the event as unpublished |
 
 ### Step groups
 
 | Variable | Default | Required | Description |
 |---|---|---|---|
-| `CCE_CALENDAR_ZONE` | `UTC` | Yes, where a protocol has a `calendar-day` step group | The time zone in which a `calendar-day` group counts its days, as an IANA name such as `Africa/Kigali` or `Africa/Nairobi`. An event on a later day in this zone than the group's latest cycle opens a new cycle. Clinical times are stored in UTC, so with the default a check-in at 01:30 in Kigali (23:30 UTC the day before) would count towards the previous day's visit. One per deployment. Changing it moves the day boundary for cycles opened from then on; cycles already opened keep the day they opened on |
+| `CCE_CALENDAR_ZONE` | `UTC` | Yes, where a protocol has a `calendar-day` step group | The time zone in which a `calendar-day` group counts its days. Give it as an IANA name such as `Africa/Kigali` or `Africa/Nairobi`. An event on a later day in this zone than the group's latest cycle opens a new cycle. Clinical times are stored in UTC. So with the default, a check-in at 01:30 in Kigali (23:30 UTC the day before) would count towards the previous day's visit. One per deployment. Changing it moves the day boundary for cycles opened from then on. Cycles already opened keep the day they opened on |
 
 ### Observability
 
-No environment variables. Metrics are exposed at `/actuator/prometheus` and require no configuration;
-there is no distributed-tracing backend on the classpath, so `correlationId` propagation is via MDC and
+No environment variables. Metrics are exposed at `/actuator/prometheus` and require no configuration.
+There is no distributed-tracing backend on the classpath. So `correlationId` propagation is via MDC and
 log output only.
 
 ---
@@ -146,7 +146,7 @@ The shared infrastructure (from [cce-collector-service deployment guide](https:/
 - **PostgreSQL 16** on port `5433` (user: `cce_user`, password: `cce_pass`, database: `ccedb`)
 - **Apache Kafka 3.7.0 KRaft** on port `9092` (single broker, no Zookeeper)
 
-> **Note:** All CCE services share the same `ccedb` database. Each service owns its own tables — Flyway migrations are namespaced to avoid conflicts.
+> **Note:** All CCE services share the same `ccedb` database. Each service owns its own tables. Flyway migrations are namespaced to avoid conflicts.
 
 ---
 
@@ -225,7 +225,7 @@ spec:
 
 ## 5. Database Setup
 
-All CCE services share the same PostgreSQL database (`ccedb`) deployed by the [CCE Collector Service](https://github.com/Jayaprakash8887/cce-collector-service/blob/release-1.0.0/docs/deployment-guide.md). Each service owns its own tables within the shared database — Flyway migrations are namespaced to avoid conflicts.
+All CCE services share the same PostgreSQL database (`ccedb`) deployed by the [CCE Collector Service](https://github.com/Jayaprakash8887/cce-collector-service/blob/release-1.0.0/docs/deployment-guide.md). Each service owns its own tables within the shared database. Flyway migrations are namespaced to avoid conflicts.
 
 ### Shared Infrastructure
 
@@ -247,19 +247,23 @@ The database and user are created by the collector service's Docker Compose. The
 Flyway manages all schema migrations automatically on application startup.
 
 - Migrations are located at `classpath:db/migration`
-- Migration history is tracked in a namespaced Flyway table, `flyway_schema_history_matcher` (not the default `flyway_schema_history`), so it does not collide with other CCE services' migration history in the shared `ccedb` database
+- Migration history is tracked in a namespaced Flyway table, `flyway_schema_history_matcher`, not the default `flyway_schema_history`. So it does not collide with other CCE services' migration history in the shared `ccedb` database
 - `V1__initial_schema.sql` creates all 12 tables with their indexes and constraints
 - `V2__upgrade_from_monolith_schema.sql` transforms a 1.x `ccedb` into that shape, and is a no-op on a new one
-- `V3__met_condition_reached.sql` and `V4__optional_steps_have_no_schedule.sql` follow the SLA rules of this release: `MET` becomes a scheduled row, and only mandatory steps carry a schedule at all. **Sequencing note:** roll `cce-step-sla-service` to this release *before* this service, or its old build jams on a `transition_type` it cannot map
-- `V8__step_groups.sql` adds step groups: the `step_group_instance` table, and a `step_group_instance_id` on `step_instance`, `step_sla_state_transition`, `deviation` and `intelligence_event_log`. Needs PostgreSQL 15 or later (`NULLS NOT DISTINCT`). **Sequencing note:** run it before any service on a `cce-common-util` build that maps `step_instance.step_group_instance_id`; the Step SLA and Collector services validate their mappings at startup and fail without the column. Update the analytics CDC (`cce-data-pipeline/schema/10-step-groups-upgrade.sql`) before loading a protocol with step groups
+- `V3__met_condition_reached.sql` and `V4__optional_steps_have_no_schedule.sql` follow the SLA rules of this release. `MET` becomes a scheduled row. Only mandatory steps carry a schedule at all. **Sequencing note:** roll `cce-step-sla-service` to this release *before* this service. Otherwise its old build jams on a `transition_type` it cannot map
+- `V8__step_groups.sql` adds step groups. Needs PostgreSQL 15 or later (`NULLS NOT DISTINCT`). It adds:
+  - the `step_group_instance` table
+  - a `step_group_instance_id` on `step_instance`, `step_sla_state_transition`, `deviation` and `intelligence_event_log`
+
+  **Sequencing note:** run it before any service on a `cce-common-util` build that maps `step_instance.step_group_instance_id`. The Step SLA and Collector services validate their mappings at startup and fail without the column. Update the analytics CDC (`cce-data-pipeline/schema/10-step-groups-upgrade.sql`) before loading a protocol with step groups
 - `ddl-auto=validate` ensures Hibernate validates entity mappings against the actual schema
 - **Production:** set `spring.flyway.baseline-on-migrate=false` (default in the prod profile)
 
 > **First deployment into a shared `ccedb`.** The service owns the tables `protocol_definition`,
 > `protocol_instance`, `step_instance`, `deviation`, `trigger_index`, `matcher_event_log`,
 > `action_definition`, `intelligence_event_log`, `facility`,
-> `protocol_instance_history` and `step_instance_history`. `V1` creates them, so those names must
-> be free in the target database — the service cannot share them with another tenant of `ccedb`.
+> `protocol_instance_history` and `step_instance_history`. `V1` creates them. So those names must
+> be free in the target database. The service cannot share them with another tenant of `ccedb`.
 
 **Post-deploy check:**
 
@@ -311,18 +315,24 @@ kafka-topics.sh --create --topic cce.events.inbound.dlq \
 
 ### Event Replay
 
-**Before replaying events onto `cce.events.inbound`, stop `cce-step-sla-service`.** Bring it back only once this service has drained the backlog. **Event Replay** is the term for any such run — events re-published after a fix, a historical backfill during migration, or a long outage that left this consumer group far behind.
+**Before replaying events onto `cce.events.inbound`, stop `cce-step-sla-service`.** Bring it back only once this service has drained the backlog. **Event Replay** is the term for any such run:
 
-The SLA service decides a step is overdue by finding no completion recorded on it, which is only sound once every event that could have completed it has been matched here. While a backlog is outstanding it reads not-yet-matched as not-done, and records `OVERDUE` / `MISSED` deviations against steps whose completing event is still queued. Those verdicts, and the clinician alerts they trigger, cannot be withdrawn. Replaying historical events makes this the default rather than a risk: SLA thresholds are anchored to *clinical* time, so a step created from a month-old event is scheduled with its deadline already in the past and is judged within seconds.
+- events re-published after a fix
+- a historical backfill during migration
+- a long outage that left this consumer group far behind
 
-**Nothing in this service needs stopping or special handling for a replay** — it is the SLA service that must wait. To confirm this service is caught up before that one is restarted:
+The SLA service decides a step is overdue by finding no completion recorded on it. That is only sound once every event that could have completed the step has been matched here. While a backlog is outstanding, the SLA service reads not-yet-matched as not-done. It records `OVERDUE` / `MISSED` deviations against steps whose completing event is still queued. Those verdicts cannot be withdrawn, and neither can the clinician alerts they trigger.
+
+Replaying historical events makes this the default rather than a risk. SLA thresholds are anchored to *clinical* time. So a step created from a month-old event is scheduled with its deadline already in the past. It is judged within seconds.
+
+**Nothing in this service needs stopping or special handling for a replay.** It is the SLA service that must wait. To confirm this service is caught up before that one is restarted:
 
 ```bash
 kafka-consumer-groups.sh --bootstrap-server kafka:9092 \
   --group cce-matcher-service --describe
 ```
 
-`LAG 0` on every partition means the database writes for those events are committed, not merely that the records were read — this service commits offsets only after a record is processed (`enable-auto-commit: false`). Wait a few minutes at zero before restarting the SLA service; a late burst is easy to miss.
+`LAG 0` on every partition means the database writes for those events are committed. It means more than that the records were read. This service commits offsets only after a record is processed (`enable-auto-commit: false`). Wait a few minutes at zero before restarting the SLA service. A late burst is easy to miss.
 
 The full runbook, and what to do if the sequence was missed, is in the `cce-step-sla-service` repository's deployment guide.
 
@@ -334,7 +344,7 @@ Failed messages are retried with `FixedBackOff` (5 attempts × 2s interval in pr
 
 ## 7. JVM Tuning
 
-The Dockerfile does not set a default `JAVA_OPTS` — its entrypoint is `java $JAVA_OPTS -jar app.jar`, so the JVM runs with no extra flags unless `JAVA_OPTS` is supplied at runtime (`docker run -e JAVA_OPTS=...` or a Kubernetes env var).
+The Dockerfile does not set a default `JAVA_OPTS`. Its entrypoint is `java $JAVA_OPTS -jar app.jar`. So the JVM runs with no extra flags unless `JAVA_OPTS` is supplied at runtime (`docker run -e JAVA_OPTS=...` or a Kubernetes env var).
 
 ### Recommended Production Flags
 
@@ -378,7 +388,7 @@ JAVA_OPTS="\
 |---|---|---|
 | `cce.events.processed` | Counter | Sudden drop = consumer issue |
 | `cce.events.duplicate` | Counter | High rate = upstream replay |
-| `cce.events.matched{status="zero_match"}` | Counter (tagged) | High rate = missing protocols. There is no separate `cce.events.zero_match` metric — it is a tag on `cce.events.matched` |
+| `cce.events.matched{status="zero_match"}` | Counter (tagged) | High rate = missing protocols. There is no separate `cce.events.zero_match` metric. It is a tag on `cce.events.matched` |
 | `cce.events.processing.duration` | Timer | p99 > 500ms |
 | `cce.step.matching.duration` | Timer | p99 > 200ms |
 | `cce.protocol.instances.active` | Gauge | Abnormal growth |
@@ -422,8 +432,8 @@ psql -U cce_user -h postgres-host -p 5433 ccedb < backup_20250101.sql
 
 - **Kafka offsets:** Consumer group offsets are stored in Kafka. On restart, processing resumes from the last committed offset.
 - **Idempotency:** The `(cloudeventsId, source)` unique constraint on `matcher_event_log` ensures safe event reprocessing.
-- **Protocol definitions:** Stored in PostgreSQL with JSONB and owned by the CCE Protocol Service, which also maintains `trigger_index`. Matcher reads both; it cannot rebuild the index. Its in-memory caches reconcile against the tables every `CCE_PROTOCOL_REFRESH_INTERVAL_MS`, so a restart is never needed to pick up a protocol change.
-- **Condition-only triggers:** Held in memory only — they have no `data[]` to index. Derived from the stored definitions at startup and re-derived on every reconciliation sweep, so a protocol published or retired by the management service takes effect within one `CCE_PROTOCOL_REFRESH_INTERVAL_MS`.
+- **Protocol definitions:** Stored in PostgreSQL with JSONB. Owned by the CCE Protocol Service, which also maintains `trigger_index`. Matcher reads both. It cannot rebuild the index. Its in-memory caches reconcile against the tables every `CCE_PROTOCOL_REFRESH_INTERVAL_MS`. So a restart is never needed to pick up a protocol change.
+- **Condition-only triggers:** Held in memory only, because they have no `data[]` to index. Derived from the stored definitions at startup. Re-derived on every reconciliation sweep. So a protocol published or retired by the management service takes effect within one `CCE_PROTOCOL_REFRESH_INTERVAL_MS`.
 
 ---
 
@@ -434,11 +444,11 @@ psql -U cce_user -h postgres-host -p 5433 ccedb < backup_20250101.sql
 | Problem | Possible Cause | Resolution |
 |---|---|---|
 | Service won't start | Database unreachable | Check `DB_HOST`, `DB_PORT`, network connectivity |
-| Flyway migration fails | Schema already exists | V1 is greenfield-only: `baseline-version` is `0`, so Flyway baselines at 0 and still applies V1, which fails on existing tables. Confirm the target `ccedb` is empty |
+| Flyway migration fails | Schema already exists | V1 is greenfield-only. `baseline-version` is `0`, so Flyway baselines at 0 and still applies V1. V1 fails on existing tables. Confirm the target `ccedb` is empty |
 | No events processed | Kafka unreachable | Check `KAFKA_BOOTSTRAP_SERVERS`, broker health |
 | Events going to DLQ | Deserialization errors | Check message format matches CloudEvents schema |
 | High consumer lag | Slow processing | Increase `KAFKA_CONCURRENCY`, check DB performance |
-| Spurious `OVERDUE` / `MISSED` deviations after a backlog was processed | `cce-step-sla-service` was left running while this service still had events to match, so it judged steps whose completing event was still queued | Not self-correcting. See [Event Replay](#event-replay) — stop the SLA service for the duration next time |
+| Spurious `OVERDUE` / `MISSED` deviations after a backlog was processed | `cce-step-sla-service` was left running while this service still had events to match. So it judged steps whose completing event was still queued | Not self-correcting. See [Event Replay](#event-replay). Stop the SLA service for the duration next time |
 | Connection pool exhaustion | Too many concurrent requests | Increase `DB_POOL_SIZE` |
 
 ### Log Configuration

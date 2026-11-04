@@ -2,23 +2,25 @@
 
 > The two tables whose JPA entities belong to this service alone.
 
-Eleven further tables — `protocol_definition`, `protocol_instance`, `step_instance`,
-`step_group_instance`, `step_sla_state_transition`, `deviation`, `trigger_index`,
-`action_definition`, `intelligence_event_log` and the two state-transition history tables — are mapped
-by entities in **cce-common-util** and documented there, once:
+Eleven further tables are mapped by entities in **cce-common-util**. They are `protocol_definition`,
+`protocol_instance`, `step_instance`, `step_group_instance`, `step_sla_state_transition`, `deviation`,
+`trigger_index`, `action_definition`, `intelligence_event_log` and the two state-transition history
+tables. They are documented there, once:
 
 - [Data Dictionary](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md) — columns, indexes, enums, JSONB shapes, and the full ER diagram
 - [Data Dictionary §3](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#3-ownership) — which service creates and which writes each table
-- [Step group instances](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#step-group-instances-step_group_instance) — `step_group_instance`, one row per instance of a step group, and the `step_group_instance_id` this service sets on `step_instance` when it opens a group
+- [Step group instances](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#step-group-instances-step_group_instance) — `step_group_instance`, with one row per instance of a step group. Also the `step_group_instance_id` that this service sets on `step_instance` when it opens a group.
 
-This service **runs the migration** for every table except the three the Protocol Service owns, so it
+This service **runs the migration** for every table except the three the Protocol Service owns. So it
 creates far more tables than it documents here. Creating a table and mapping it are separate things:
-the DDL is in `V1__initial_schema.sql` (and `V8__step_groups.sql` for `step_group_instance` and the
-`step_group_instance_id` columns), the column reference is wherever the entity lives.
 
-The history tables moved out in 2.0.0. Their entities now live in cce-common-util, because the
-Step SLA Service also appends to `step_instance_history` — recording each `sla_status` transition it
-applies — so they stopped belonging to this service alone. This service still runs their DDL. See
+- The DDL is in `V1__initial_schema.sql`. The DDL for `step_group_instance` and the
+  `step_group_instance_id` columns is in `V8__step_groups.sql`.
+- The column reference is wherever the entity lives.
+
+The history tables moved out in 2.0.0. Their entities now live in cce-common-util. The reason is that
+the Step SLA Service also appends to `step_instance_history`, recording each `sla_status` transition it
+applies. So the tables stopped belonging to this service alone. This service still runs their DDL. See
 [Data Dictionary §12](https://github.com/openphc/cce-common-util/blob/release-2.0.0/docs/data-dictionary.md#12-state-transition-history-tables).
 
 ---
@@ -31,8 +33,8 @@ applies — so they stopped belonging to this service alone. This service still 
 | `facility` | Reference lookup of known facilities — auto-populated from inbound event payloads | Low (one row per facility) |
 
 No other service reads or writes either one. `matcher_event_log` in particular is this service's
-idempotency guard: nothing outside it has a reason to consult the record of which events have already
-been processed.
+idempotency guard. Nothing outside this service has a reason to consult the record of which events have
+already been processed.
 
 ---
 
@@ -62,11 +64,11 @@ been processed.
 |------|------|---------|
 | Primary Key | `matcher_event_log_pkey` | `id` |
 | Unique | `matcher_event_log_cloudevents_id_source_key` | `(cloudevents_id, source)` — Idempotency guard. |
-| Check | — | `processing_status IN ('MATCHED', 'ZERO_MATCH', 'DUPLICATE')`. `DUPLICATE` is no longer written: a repeat of a logged event is only counted (`cce.events.duplicate`), since a second row would violate the unique key above. The value stays admitted for rows written before that. |
+| Check | — | `processing_status IN ('MATCHED', 'ZERO_MATCH', 'DUPLICATE')`. `DUPLICATE` is no longer written. A repeat of a logged event is only counted (`cce.events.duplicate`), because a second row would violate the unique key above. The value stays admitted for rows written before that. |
 
 ### Design Notes
 
-- **Lean design:** Unlike a full audit log, `matcher_event_log` stores only what's needed for idempotency and event-to-step linking. Patient, facility, and action details are not denormalized here — they live in the step instances and audit log.
+- **Lean design:** Unlike a full audit log, `matcher_event_log` stores only what's needed for idempotency and event-to-step linking. Patient, facility, and action details are not denormalized here. They live in the step instances and audit log.
 - **FK from step_instance:** `step_instance.matched_event_id` references `matcher_event_log.id`, linking each completed step to its triggering event.
 
 
@@ -75,7 +77,7 @@ been processed.
 
 ## 3. facility
 
-Reference lookup table of known facilities, auto-populated from inbound FHIR event payloads by the `InboundEventConsumer`. Acts as the authoritative facility registry within the matcher service and is CDC-synced to ClickHouse for analytics.
+Reference lookup table of known facilities. The `InboundEventConsumer` auto-populates it from inbound FHIR event payloads. It acts as the authoritative facility registry within the matcher service. It is CDC-synced to ClickHouse for analytics.
 
 ### Columns
 
@@ -83,9 +85,9 @@ Reference lookup table of known facilities, auto-populated from inbound FHIR eve
 |--------|------|----------|---------|-------------|
 | `id` | `UUID` | **NOT NULL** | `gen_random_uuid()` | Surrogate primary key. |
 | `facility_id` | `VARCHAR` | **NOT NULL** | — | The bare facility identifier extracted from the FHIR resource location reference (e.g., `"1302"` from `"Location/1302"`). Unique across the table. |
-| `facility_name` | `VARCHAR` | Yes | `NULL` | Human-readable facility display name extracted from the FHIR `display` field of the same reference node. Null when the payload carries no display value — updated on the next event that does. |
+| `facility_name` | `VARCHAR` | Yes | `NULL` | Human-readable facility display name extracted from the FHIR `display` field of the same reference node. Null when the payload carries no display value. Updated on the next event that does. |
 | `expected_patients_per_day` | `INTEGER` | Yes | `NULL` | Programme-configured daily patient volume baseline. Updated directly in the database by programme staff. Used by analytics MVs to calculate adoption rates. |
-| `district_name` | `VARCHAR` | Yes | `NULL` | District the facility belongs to. Not populated by the matcher service — updated directly in the database by programme staff (added in `V7`). |
+| `district_name` | `VARCHAR` | Yes | `NULL` | District the facility belongs to. Not populated by the matcher service. Updated directly in the database by programme staff. Added in `V7`. |
 | `created_at` | `TIMESTAMPTZ` | **NOT NULL** | `now()` | Timestamp of first insertion. |
 | `updated_at` | `TIMESTAMPTZ` | **NOT NULL** | `now()` | Timestamp of last modification. |
 
@@ -102,7 +104,7 @@ Reference lookup table of known facilities, auto-populated from inbound FHIR eve
 
 ### Auto-population Behaviour
 
-The `InboundEventConsumer` calls `FacilityService.upsertFacility()` for every inbound event before handing off to the matcher engine. The service extracts `facility_id` and `facility_name` from the FHIR payload in a single pass and applies the following upsert rules:
+The `InboundEventConsumer` calls `FacilityService.upsertFacility()` for every inbound event before handing off to the matcher engine. The service extracts `facility_id` and `facility_name` from the FHIR payload in a single pass. It then applies the following upsert rules:
 
 | Scenario | Action |
 |----------|--------|
@@ -121,16 +123,25 @@ Resource-type-specific paths for `facility_id` and `facility_name`, tried in ord
 | `Immunization` | `location.reference` (strip prefix) or `identifier.value` | envelope `facilityname`, else `location.display` |
 | Any other type (`Observation`, `Condition`, `MedicationRequest`, ...) | `source-facility` extension `valueString` — the only signal these resource types carry | envelope `facilityname`, else `null` (extension has no display) |
 
-Per FHIR R4 (https://hl7.org/fhir/R4/encounter.html), `hospitalization` is only ever populated on a transfer `Encounter` — plain visit/consultation encounters never carry it. For a `TRANSFER_ENCOUNTER`, `location[0].location` holds the transfer **destination**, not the reporting/source facility, so `hospitalization.origin` is checked first and is the correct source facility; `location[0]` is the fallback used by the non-transfer encounter types that have no `hospitalization` at all. The `source-facility` extension is deliberately never consulted for `Encounter` — it does not reliably distinguish origin from destination and is superseded by reading `hospitalization.origin` directly.
+Per FHIR R4 (https://hl7.org/fhir/R4/encounter.html), `hospitalization` is only ever populated on a transfer `Encounter`. Plain visit/consultation encounters never carry it.
 
-If the CloudEvent envelope already carries a `facilityid` extension attribute (set by the emitter), that value is used directly as the ID without re-parsing the payload. Likewise, if the envelope carries a `facilityname` extension attribute, it is used directly as the name; only when it is absent or blank does resolution fall back to the FHIR body's matching reference node's `display` field. Failures are non-fatal — a warning is logged and matcher processing continues unaffected.
+- For a `TRANSFER_ENCOUNTER`, `location[0].location` holds the transfer **destination**, not the reporting/source facility. So `hospitalization.origin` is checked first. It is the correct source facility.
+- `location[0]` is the fallback. The non-transfer encounter types use it, because they have no `hospitalization` at all.
+- The `source-facility` extension is deliberately never consulted for `Encounter`. It does not reliably distinguish origin from destination. Reading `hospitalization.origin` directly supersedes it.
+
+Two envelope attributes take precedence over the payload:
+
+- If the CloudEvent envelope already carries a `facilityid` extension attribute (set by the emitter), that value is used directly as the ID. The payload is not re-parsed.
+- If the envelope carries a `facilityname` extension attribute, it is used directly as the name. Only when it is absent or blank does resolution fall back to the `display` field of the matching reference node in the FHIR body.
+
+Failures are non-fatal. A warning is logged and matcher processing continues unaffected.
 
 ### Design Notes
 
-- **Owned by the matcher service:** Unlike the CCE Collector Service, which does not extract facility names, this service is the first point where both the bare ID and display name are available together from the FHIR payload.
+- **Owned by the matcher service:** The CCE Collector Service does not extract facility names. This service is the first point where both the bare ID and display name are available together from the FHIR payload.
 - **CDC-synced to ClickHouse:** Via the Debezium connector. Downstream analytics materialized views join against this table for facility-level KPIs and adoption rate calculations.
 - **`expected_patients_per_day` is NULL by default:** Programme staff update this column directly in the database once they know the facility's expected volume. The matcher service never writes to this column.
-- **`district_name` is NULL by default:** no backfill. Like `expected_patients_per_day`, it is populated directly in the database by programme staff — the matcher service never writes to it.
+- **`district_name` is NULL by default:** no backfill. Like `expected_patients_per_day`, it is populated directly in the database by programme staff. The matcher service never writes to it.
 
 ---
 
