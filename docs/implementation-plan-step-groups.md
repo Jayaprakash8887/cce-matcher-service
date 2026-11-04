@@ -285,7 +285,8 @@ Phase 1 opens a group in advance when its predecessor completes, or when its par
 *Decided:*
 - only an event for one of its steps opens a `calendar-day` or `entry-step` cycle. A predecessor completing, its parent opening, progressive instantiation and backfill open none. Work for a group with no cycle yet waits for that event. The one exception is an `entry-step` group's expected entry step (point 32);
 - an event for any of an `entry-step` group's steps opens its cycle 0 when there is none. So a BP taken before history opens it, without history: opening a cycle never creates the entry step. The history that follows starts cycle 1;
-- consequence: unless point 32 applies, history is not awaited, and never judged, until the Consultation starts.
+- consequence: unless point 32 applies, history is not awaited, and never judged, until the Consultation starts;
+- a step inside a `calendar-day` group may have a `relatedAction` to a step outside it. The edge orders the step: order violations and backfill follow it. But its offset sets no due date. A visit can't be opened in advance, so each visit creates the step when it opens, with the visit's due date. The protocol service warns at load for a non-zero offset of this kind. To give the first visit a deadline, the author puts the `relatedAction` on the `calendar-day` group.
 
 **27. What follows a group before completion exists.** *(E2 + F2; blocks phases 1 and 4)*
 Phases 1–3 never record a group as complete or closed (F2). Anything that follows a group, such as ANC visit 3 after visit 2, is created only when the group completes or closes (E2, point 7). Before phase 4 it would never be created. An event for one of its steps would open it with no due date.
@@ -467,6 +468,7 @@ ALTER TABLE intelligence_event_log
 - Accept the `cycle-boundary` extension, with `calendar-day` or `entry-step` (point 5).
 - A `calendar-day` group inside another `calendar-day` group, at any depth, is rejected (point 23). Inside an `entry-step` group it is allowed.
 - An `entry-step` group names its entry step in exactly one `cycle-entry-step` extension. The entry step is a step inside it, directly or in a nested group, with no predecessor inside it (point 5).
+- Warn, without refusing, for a step inside a `calendar-day` group with a non-zero offset to an action outside it (point 26).
 
 **Matcher.**
 - **`calendar-day`:** a new cycle opens for an event whose clinical day is later than the latest cycle's day. The day is taken in the configured zone (point 4). Every other event goes to the latest cycle (points 6 and 12). Only an event opens a cycle. A predecessor completing, or the parent opening, opens none (point 26).

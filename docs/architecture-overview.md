@@ -1047,6 +1047,14 @@ A `calendar-day` group can't be inside another `calendar-day` group, at any dept
 
 A group that follows a step, or that opens with its parent, opens only when it is mandatory. An optional group waits for an event for one of its steps.
 
+**A step in a `calendar-day` group that follows a step outside it.** For example, `registration; journey [calendar-day] { check-in; consent, 2 days after registration }`. The Protocol Service loads it, with a warning.
+- **The edge orders the step.** A consent recorded before registration raises an `ORDER_VIOLATION`. A consent recorded with no registration backfills registration.
+- **The offset sets no due date.** Consent has no predecessor inside the journey, so each visit creates it when it opens, with the visit's own due date. Registration + 2 days is never used, so consent's `tolerance-days` never applies.
+- **It repeats with every visit.** A step that happens once per enrollment belongs outside the visit group.
+- **To give the first visit a deadline,** put the `relatedAction` on the `calendar-day` group itself. Cycle 0 then takes it as its planned due date (example 6).
+
+The warning comes from `PlanDefinitionParser.findOffsetsIgnoredInCalendarDayGroups`. It is raised for a non-zero offset to an action outside the step's `calendar-day` group. An edge to a step inside the same visit is not reported.
+
 **An entry step the protocol expects.** There is one exception to the rule above: an entry step with a `relatedAction` to a step outside its group. The protocol then expects the entry step after that step.
 - When that step completes, progressive instantiation opens the group's cycle 0, if the group has none yet.
 - It creates the entry step `NOT_STARTED`, due by its own offset. So the entry step goes `OVERDUE`, then `MISSED`, if the patient never comes for it.
