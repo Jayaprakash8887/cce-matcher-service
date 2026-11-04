@@ -44,7 +44,7 @@
 
 ## 2. Points the decisions left open
 
-The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–33, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
+The decisions in §1 left some cases open: places where two decisions conflicted, or where a decision didn't cover a case. This section lists them as points 1–34, each with an example, its resolution and the phase it affects. Each resolution is labelled with its status:
 - ***Decided:*** settled by an explicit decision.
 - ***Accepted proposal:*** an engineering detail whose proposal stands unless a reviewer objects.
 - ***Open:*** no answer yet.
@@ -269,7 +269,16 @@ Only the named step starts a new cycle, so BP can wait on nothing without a seco
 
 **33. What opens an `entry-step` cycle.** *(B2 + E2; phase 2)*
 Point 26 kept opening an `entry-step` group in advance. The Consultation then opens when check-in completes, with history awaiting, and the first history completes it rather than starting a Consultation. The entry step should say when a cycle starts.
-*Decided:* only an event for one of its steps opens an `entry-step` cycle, as point 26 decided for `calendar-day`. A predecessor completing, its parent opening, progressive instantiation and backfill open none; work for a group with no cycle yet waits for that event. An event for any of its steps opens cycle 0 when there is none, so a BP taken before history opens it, with history awaiting. Each event for the entry step starts the next cycle, even when the latest cycle was opened by another step and still awaits its entry step: that cycle isn't closed, and its awaiting entry step stays open. Consequences: until the Consultation starts, history is not awaited and is never judged; and when BP opens cycle 0, the history created awaiting there is never completed, since the history event starts cycle 1. With a due date, that history goes `OVERDUE` and then `MISSED`. This is accepted until cycles are closed (E3, phase 4).
+*Decided:* only an event for one of its steps opens an `entry-step` cycle, as point 26 decided for `calendar-day`. A predecessor completing, its parent opening, progressive instantiation and backfill open none; work for a group with no cycle yet waits for that event. An event for any of its steps opens cycle 0 when there is none, so a BP taken before history opens it. Each event for the entry step starts the next cycle, unless the latest cycle still awaits its entry step (point 34). Point 34 also lets an entry step's own `relatedAction` open cycle 0. Consequence: unless that applies, history is not awaited and is never judged until the Consultation starts.
+
+**34. An entry step that follows a step outside its group.** *(E2 + A4; phase 2)*
+With point 33, an entry step's `relatedAction` to a step outside its group, such as g2-step-1 2 days after step-1, did nothing for its SLA: no instance existed until its event, which created it due on arrival. A patient who never came was never reported, and the offset and `tolerance-days` looked as though they were in effect when they were not. And when BP opened cycle 0, the entry step was created awaiting there, and the history that followed went to cycle 1, so the awaiting one went `MISSED` though it happened.
+*Decided:*
+- when the step the entry step follows completes, progressive instantiation opens the group's cycle 0, if it has none inside the parent's instance, and creates the entry step `NOT_STARTED`, due by its own offset. Only cycle 0: a later cycle already holds its entry step. Backfill, a parent opening and other work still open none;
+- an event for the entry step completes an awaiting entry step in the latest cycle; otherwise it starts the next cycle;
+- a cycle's opening never creates the entry step. A cycle opened by BP holds no history, and the history that follows starts cycle 1, as the customer decided in point 33.
+
+Consequence: a step that follows the entry step, such as examination, recorded before it, backfills the entry step into its cycle, and the entry step's event then completes it there rather than starting another cycle.
 
 ---
 
@@ -401,7 +410,7 @@ ALTER TABLE intelligence_event_log
 
 **Matcher.**
 - **`calendar-day`:** a new cycle opens for an event whose clinical day, in the configured zone (point 4), is later than the latest cycle's day; every other event goes to the latest cycle (points 6 and 12). Only an event opens a cycle; a predecessor completing, or the parent opening, opens none (point 26).
-- **`entry-step`:** an event for any of its steps opens cycle 0 when there is none, and each event for the entry step starts the next cycle (points 32 and 33). Only an event opens a cycle; a predecessor completing, or the parent opening, opens none (point 33).
+- **`entry-step`:** an event for any of its steps opens cycle 0 when there is none, and each event for the entry step starts the next cycle unless the latest still awaits it (points 32–34). Only an event opens a cycle, or the completion of a step outside the group that the entry step follows (point 34); a parent opening opens none (point 33).
 - **Where an event goes is decided before its row is looked for.** For a step in a group, under the `protocol_instance` lock, from the top-level group down: each group's latest cycle inside its parent's, or a new cycle by the rules above. The event then completes the step's open row in that instance, or adds a further row there (point 25). Phase 1 looked for the open row first, outside the lock; on a new day it would complete the previous day's row instead of opening the new cycle.
 - **A later cycle has no due date.** Cycle 0 of a visit-driven group takes its planned due date, as any group does. A cycle opened because the patient came back has none (design §7.1, "usually none"): its predecessor's completion + offset would already be past. Its entry steps other than the matched one are therefore unjudged (point 29); the matched step is due when its event made it, as in phase 1.
 - **Earlier cycles stay open.** Closing them as incomplete is E3, which comes with closure in phase 4 (F2).

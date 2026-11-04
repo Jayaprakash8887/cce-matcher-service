@@ -617,8 +617,9 @@ class StepGroupLifecycleTest {
 
             List<StepGroupInstance> cycles = cyclesOf("consultation", null);
             assertEquals(2, cycles.size());
-            assertEquals(cycles.get(1).getId(), groupInstanceIdOf(rowsFor("history").stream()
-                    .filter(stepInstance -> stepInstance.getStepStatus() == StepStatus.COMPLETED).findFirst().orElseThrow()));
+            List<StepInstance> histories = rowsFor("history");
+            assertEquals(1, histories.size(), "BP opening cycle 0 leaves history to its event");
+            assertEquals(cycles.get(1).getId(), groupInstanceIdOf(histories.get(0)));
         }
 
         @Test
@@ -627,6 +628,49 @@ class StepGroupLifecycleTest {
             record("history", T0.plusMinutes(10));
 
             assertEquals(2, cyclesOf("consultation", null).size());
+        }
+    }
+
+    @Nested
+    class EntryStepFollowsAStepOutsideItsGroup {
+
+        /** Group 1 of step 1 and group 2, repeating by entry step, whose entry step follows step 1 by 2 days. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent group1 = group(pd.addAction(), "group-1", "must");
+            step(group1.addAction(), "step-1", "must");
+            PlanDefinitionActionComponent group2 =
+                    namingEntryStep(repeatingBy(group(group1.addAction(), "group-2", "must"), "entry-step"), "g2-step-1");
+            after(step(group2.addAction(), "g2-step-1", "must"), "step-1", 2);
+            use(pd);
+        }
+
+        @Test
+        void stepOnesCompletion_opensCycle0_withTheEntryStepAwaiting_dueByItsOwnOffset() {
+            record("step-1", T0);
+
+            StepGroupInstance group1 = cyclesOf("group-1", null).get(0);
+            assertEquals(1, cyclesOf("group-2", group1).size());
+            StepInstance awaiting = rowsFor("g2-step-1").get(0);
+            assertEquals(StepStatus.NOT_STARTED, awaiting.getStepStatus());
+            assertEquals(T0.plusDays(2), awaiting.getDueDate());
+            assertEquals(cyclesOf("group-2", group1).get(0).getId(), groupInstanceIdOf(awaiting));
+        }
+
+        @Test
+        void theFirstEntryStepEvent_completesTheAwaitingOne_theNextStartsCycle1() {
+            record("step-1", T0);
+            StepInstance first = record("g2-step-1", T0.plusDays(1));
+
+            StepGroupInstance group1 = cyclesOf("group-1", null).get(0);
+            assertEquals(1, cyclesOf("group-2", group1).size());
+            assertSame(rowsFor("g2-step-1").get(0), first);
+            assertEquals(StepStatus.COMPLETED, first.getStepStatus());
+
+            record("g2-step-1", T0.plusDays(3));
+
+            assertEquals(2, cyclesOf("group-2", group1).size());
         }
     }
 
@@ -797,6 +841,22 @@ class StepGroupLifecycleTest {
 
             assertEquals(List.of(visit(0).getId(), visit(1).getId()),
                     rowsFor("prescription").stream().map(StepGroupLifecycleTest::groupInstanceIdOf).toList());
+        }
+
+        @Test
+        void anExaminationBeforeHistory_backfillsHistory_whichTheHistoryThatFollowsCompletes() {
+            record("check-in", DAY_1);
+            record("history", DAY_1.plusMinutes(10));
+
+            record("examination", DAY_15);
+            StepInstance backfilled = rowsFor("history").get(1);
+            assertEquals(StepStatus.NOT_STARTED, backfilled.getStepStatus());
+            assertEquals(consultation(visit(1), 0).getId(), groupInstanceIdOf(backfilled));
+
+            StepInstance history = record("history", DAY_15.plusMinutes(10));
+
+            assertSame(backfilled, history);
+            assertEquals(1, cyclesOf("consultation", visit(1)).size(), "no second Consultation");
         }
 
         @Test

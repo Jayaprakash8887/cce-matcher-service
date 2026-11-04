@@ -80,7 +80,7 @@ public class ProgressiveInstantiationService {
      *       again, so the due date counts from the last prerequisite to finish rather than whichever
      *       happened to complete first;</li>
      *   <li>its group has no instance it can join: a group that repeats by visit opens only for an event of
-     *       its own;</li>
+     *       its own, except that an {@code entry-step} group's entry step opens its cycle 0;</li>
      *   <li>it already has a step instance where it would go. Its own event may have created one before
      *       this prerequisite completed, a redelivered event may have completed the prerequisite again, or
      *       opening its group may just have created it. A step in a group is looked for in that group
@@ -116,7 +116,7 @@ public class ProgressiveInstantiationService {
             // In a group: the group instance this work goes to, opened when the group has none yet.
             Optional<StepGroupInstance> groupInstanceForWork = stepGroupService.groupInstanceForWork(enrollment,
                     dependentStepMetadata.groupId(), completedStepInstance.getStepGroupInstance(),
-                    completedStepInstance.getCompletedAt());
+                    completedStepInstance.getCompletedAt(), dependentStepMetadata.id());
             if (groupInstanceForWork.isEmpty()) {
                 // A group that repeats by visit, with no cycle yet: only an event of its own opens one.
                 log.debug("Skipping progressive instantiation of {} — its group repeats by visit and has no cycle yet "

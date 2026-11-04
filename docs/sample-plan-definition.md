@@ -780,7 +780,7 @@ What this example does, given a mandatory `anc-registration` step elsewhere in t
 What this example does:
 - **The first event of a day** opens that day's visit, a new journey cycle; any other event that day joins it. Days are counted in the deployment's time zone (`CCE_CALENDAR_ZONE`). An event dated on an earlier day, arriving late, joins the latest visit.
 - **Check-in completing doesn't open the Consultation,** although it follows check-in: a group that repeats by visit opens only for an event for one of its steps. Until then history is not awaited or judged.
-- **Each history starts a Consultation.** The first in a visit starts the first, and a second history in that visit starts a second. An examination joins the current Consultation, as a further row if it already has one. An examination before any history in the visit starts the Consultation, with history awaiting; the history that follows then starts a second Consultation.
+- **Each history starts a Consultation.** The first in a visit starts the first, and a second history in that visit starts a second. An examination joins the current Consultation, as a further row if it already has one. An examination before any history in the visit starts the Consultation; examination follows history, so history is backfilled there, awaiting, and the history that follows completes it.
 - **Only cycle 0 has a planned due date.** A visit or Consultation opened because the patient came back has none, so its awaited steps are not judged.
 
 **The entry step.** An `entry-step` group must name its entry step, the step that starts each cycle, by action id in the `cycle-entry-step` extension. The Consultation above names history. The entry step decides only when a cycle starts, not the order of the steps, so another step can still wait on nothing. A Consultation where BP can be taken before history, but only history starts a new Consultation:
@@ -806,7 +806,8 @@ What this example does:
 What this example does:
 - **A second BP** joins the current Consultation as a further completed BP, since BP is not the entry step.
 - **Each history starts the next Consultation.**
-- **A BP before any history** starts the first Consultation, with history awaiting. The history that follows still starts the next Consultation, and the first one's history stays awaiting.
+- **A BP before any history** starts the first Consultation, without history: a cycle's opening never creates the entry step. The history that follows starts the next Consultation.
+- **An entry step with a `relatedAction` to a step outside the group,** such as history 2 days after check-in, is expected: when that step completes, the first Consultation opens with history `NOT_STARTED`, due by its offset, and the first history completes it.
 - **The extension is required, exactly once.** An `entry-step` group without it, or with it more than once, is refused at load.
 - **The entry step must be one of the group's own steps, waiting on nothing inside it.** A step in a nested group, a step outside the group, or a step with a `relatedAction` to another step in the group is refused at load.
 
