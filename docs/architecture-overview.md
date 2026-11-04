@@ -1058,6 +1058,19 @@ The warning comes from `PlanDefinitionParser.findOffsetsIgnoredInCalendarDayGrou
 
 Opening a cycle never creates the entry step. Its own event creates it, or the work that expects it. So a cycle opened by another step's event, such as a BP before any history, has no entry step waiting in it.
 
+**`relatedAction` and groups.** A `relatedAction` can be on a group, on a step inside a group, or point at a group. What is supported:
+
+| What | Example | Loads? | What happens |
+|---|---|---|---|
+| A group follows a step. The `relatedAction` is on the group | `visit-2`, 6 weeks after `registration` | Yes | The group's cycle 0 is due when registration is done, plus 6 weeks. Its first steps take that due date. A mandatory group that doesn't repeat by visit opens as soon as registration is done (`openFollowingGroup`). An optional group, or one that repeats by visit, waits for an event for one of its steps, and cycle 0 still takes the planned due date |
+| A step inside a group follows a step outside it | `visit { bp, 7 days after registration }` | Yes | The order works: order violations and backfill follow it. But if the step waits on nothing inside the group, it is created when the group opens, with the group's due date, not its own offset. The exception is an `entry-step` group's entry step, which keeps its own offset (above). In a `calendar-day` group the Protocol Service also warns (above) |
+| A step follows a group. The `relatedAction` names the group | `referral`, after `visit-2` | No, refused at load | Groups are never recorded as done yet, so the step would never be created. This comes with group completion and closure in phase 4 (plan points 7 and 27). For now, relate the step to a step inside the group |
+| A group follows a group | `visit-3`, 4 weeks after `visit-2` | No, refused at load | The same reason, and the same phase. For now, relate `visit-3` to a step inside `visit-2` |
+
+Backfill also follows a group's own `relatedAction`. For example, `visit-2` follows `registration`, and a BP in visit 2 is recorded before registration. CCE then creates the missing registration, though the BP step names no earlier step of its own (`PlanDefinitionParser.computeMustPredecessorSteps`).
+
+The refusal is in `PlanDefinitionParser.rejectFollowersOfGroups`. Only `after-end` is supported here too, as everywhere.
+
 **How an event finds its group instance.** `StepGroupService.groupInstanceForEvent` makes two passes over the groups around the matched step.
 1. **Find the groups,** from the step's own group out to the top level (`Enrollment.groupsFromInnermostOut`).
 2. **Choose their instances, from the outermost in.** A group's instances are looked up inside the instance just chosen for its parent (`findLatestCycle`). And a trigger on an outer group gives the groups inside it fresh instances.
