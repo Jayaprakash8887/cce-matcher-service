@@ -1015,7 +1015,15 @@ A group without `cycle-boundary` only ever gets the first trigger. So it has one
 
 Each instance is a cycle, numbered by `cycle_index` inside its parent's instance. So each visit's Consultation has its own cycle 0. Earlier cycles stay open: nothing closes them yet.
 
-A group inside a repeating group can only repeat by `entry-step`. The Protocol Service refuses any other `cycle-boundary` there at load, because every event of one visit falls on the same day.
+A `calendar-day` group can't be inside a group that repeats, at any depth. A group inside a repeating group can only repeat by `entry-step`. The Protocol Service refuses any other `cycle-boundary` there at load (`PlanDefinitionParser.validateCycleBoundary`, plan point 23):
+
+| Outer group | Inner group | Loads? |
+|---|---|---|
+| `calendar-day` | `calendar-day`, directly inside it | No. The outer group already opens a new instance for each day the patient comes, and the inner group's cycles are numbered inside that instance. So the inner group only ever sees one day, and could never open a second cycle |
+| `calendar-day` | `calendar-day`, deeper, e.g. inside a nested group without `cycle-boundary` | No, for the same reason. The rule applies at every depth |
+| `entry-step` | `calendar-day`, at any depth | No. Plan point 23 sets one rule for every repeating parent: a group inside it repeats by `entry-step`. The rule was written for a visit, where every event falls on the same day. It makes no exception for an `entry-step` parent, although one of its cycles could span several days |
+| no `cycle-boundary` | `calendar-day` | Yes. For example `Group 1 { Group 2 { Group 3 [calendar-day] { step 1 } } }`: see example 1 under **Examples** below |
+| `calendar-day` or `entry-step` | `entry-step`, at any depth | Yes. For example `Group 1 [calendar-day] { Group 2 { Group 3 [entry-step: step 1] { step 1 } } }`: see example 2 under **Examples** below |
 
 **What can open a new instance.** Three things:
 1. **An event** for one of the group's steps. It can bring any of the three triggers. Otherwise it joins the latest instance. `StepGroupService.groupInstanceForEvent` checks the triggers level by level. So an event in a nested group first opens any missing instance of the groups around it.
