@@ -1041,13 +1041,12 @@ A `calendar-day` group can't be inside another `calendar-day` group, at any dept
 
 A group that follows a step, or that opens with its parent, opens only when it is mandatory. An optional group waits for an event for one of its steps.
 
-**A step in a `calendar-day` group that follows a step outside it.** For example, `registration; journey [calendar-day] { check-in; consent, 2 days after registration }`. The Protocol Service loads it, with a warning.
-- **The order still works.** The `relatedAction` still says registration comes first. A consent recorded before registration raises an `ORDER_VIOLATION`. A consent recorded with no registration backfills registration.
-- **The offset is not used.** Consent has no predecessor inside the journey, so each visit creates it when it opens, with the visit's own due date. Registration + 2 days is never used, so consent's `tolerance-days` never applies.
-- **It repeats with every visit.** A step that happens once per enrollment belongs outside the visit group.
-- **To give the first visit a deadline,** put the `relatedAction` on the `calendar-day` group itself. Cycle 0 then takes it as its planned due date (example 6).
+**A group's first step that follows a step outside the group.** A group's first steps are the ones that wait on nothing inside it. Such a step can still follow a step outside the group, for example `visit { bp, 7 days after registration }`. It then keeps its own offset, like a step outside any group (`StepGroupService.firstStepDueDate`):
+- **The step it follows is done:** in cycle 0, the step is due that long after it, here registration + 7 days. Its own offset wins over the group's due date. With several such steps, the latest one counts.
+- **The step it follows isn't done yet:** the step isn't created when the group opens. Progressive instantiation creates it when that step is done, with its own offset.
+- **In a later cycle,** the patient came back, so the offset would already be past. The step is created with no due date, like every step in a later cycle.
 
-The warning comes from `PlanDefinitionParser.findOffsetsIgnoredInCalendarDayGroups`. It is raised for a non-zero offset to an action outside the step's `calendar-day` group. An offset of zero is not reported, since it only sets the order. Neither is a `relatedAction` to a step inside the same visit.
+The same holds in a `calendar-day` group. For example, in `registration; journey [calendar-day] { check-in; consent, 2 days after registration }`, the first visit's consent is due 2 days after registration. Each later visit creates consent again, with no due date. A step that should happen only once belongs outside the visit group.
 
 **An entry step the protocol expects.** There is one exception to the rule above: an entry step with a `relatedAction` to a step outside its group. The protocol then expects the entry step after that step.
 - When that step completes, progressive instantiation opens the group's cycle 0, if the group has none yet.
@@ -1063,7 +1062,7 @@ Opening a cycle never creates the entry step. Its own event creates it, or the w
 | What | Example | Loads? | What happens |
 |---|---|---|---|
 | A group follows a step. The `relatedAction` is on the group | `visit-2`, 6 weeks after `registration` | Yes | The group's cycle 0 is due when registration is done, plus 6 weeks. Its first steps take that due date. A mandatory group that doesn't repeat by visit opens as soon as registration is done (`openFollowingGroup`). An optional group, or one that repeats by visit, waits for an event for one of its steps, and cycle 0 still takes the planned due date |
-| A step inside a group follows a step outside it | `visit { bp, 7 days after registration }` | Yes | The order works: order violations and backfill follow it. But if the step waits on nothing inside the group, it is created when the group opens, with the group's due date, not its own offset. The exception is an `entry-step` group's entry step, which keeps its own offset (above). In a `calendar-day` group the Protocol Service also warns (above) |
+| A step inside a group follows a step outside it | `visit { bp, 7 days after registration }` | Yes | The order works: order violations and backfill follow it. The step keeps its own offset, like a step outside any group: in cycle 0 it is due 7 days after registration is done. Until registration is done, it isn't created. In a later cycle it has no due date (above) |
 | A step follows a group. The `relatedAction` names the group | `referral`, after `visit-2` | No, refused at load | Groups are never recorded as done yet, so the step would never be created. This comes with group completion and closure in phase 4 (plan points 7 and 27). For now, relate the step to a step inside the group |
 | A group follows a group | `visit-3`, 4 weeks after `visit-2` | No, refused at load | The same reason, and the same phase. For now, relate `visit-3` to a step inside `visit-2` |
 
@@ -1244,7 +1243,7 @@ The due date is never the time of the event that happened to open the instance. 
 
 A cycle opened because the patient came back has no due date. That is cycle 1 onwards of a `cycle-boundary` group. Its predecessor's completion plus offset would already be past.
 
-Steps created with the instance take its due date. When no due date can be worked out, for example for a top-level group with no predecessor, they get none. They then get no `step_sla_state_transition` rows, show as pending, and are never judged.
+Steps created with the instance take its due date, except a step that follows a step outside the group, which keeps its own offset (above). When no due date can be worked out, for example for a top-level group with no predecessor, they get none. They then get no `step_sla_state_transition` rows, show as pending, and are never judged.
 
 **Which row an event completes.** Both cases are in `StepInstanceService.stepInstanceForEvent`.
 - **A step in a group:** the group instance is chosen first (above), under the lock below. The event completes the step's open row in that instance, or adds a further completed row there. An earlier cycle's open row is never completed, whatever the event's clinical time.

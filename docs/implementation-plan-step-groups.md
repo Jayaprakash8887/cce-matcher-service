@@ -286,7 +286,7 @@ Phase 1 opens a group in advance when its predecessor completes, or when its par
 - only an event for one of its steps opens a `calendar-day` or `entry-step` cycle. A predecessor completing, its parent opening, progressive instantiation and backfill open none. Work for a group with no cycle yet waits for that event. The one exception is an `entry-step` group's expected entry step (point 32);
 - an event for any of an `entry-step` group's steps opens its cycle 0 when there is none. So a BP taken before history opens it, without history: opening a cycle never creates the entry step. The history that follows starts cycle 1;
 - consequence: unless point 32 applies, history is not awaited, and never judged, until the Consultation starts;
-- a step inside a `calendar-day` group may have a `relatedAction` to a step outside it. That `relatedAction` still sets the order: order violations and backfill follow it. But its offset sets no due date. A visit can't be opened in advance, so each visit creates the step when it opens, with the visit's due date. The protocol service warns at load for a non-zero offset of this kind. To give the first visit a deadline, the author puts the `relatedAction` on the `calendar-day` group.
+- a step inside a `calendar-day` group may have a `relatedAction` to a step outside it. It keeps its own offset in the first visit only (point 29). Each later visit creates it again, with no due date.
 
 **27. What follows a group before completion exists.** *(E2 + F2; blocks phases 1 and 4)*
 Phases 1–3 never record a group as complete or closed (F2). Anything that follows a group, such as ANC visit 3 after visit 2, is created only when the group completes or closes (E2, point 7). Before phase 4 it would never be created. An event for one of its steps would open it with no due date.
@@ -303,8 +303,12 @@ Phase 1 has one instance per group, so each of these lookups takes cycle 0. Once
 *Accepted proposal:* wherever the matcher adds to a group's instance, it takes the group's latest cycle, inside its parent's latest cycle. Point 12 does the same for events. Point 18's shared instance, when there is one, comes first. The rules that open a new cycle (points 5, 6 and 20) are unchanged.
 
 **29. Steps with no due date.** *(E2 + E5; blocks phase 1)*
-A step created when its group opens takes the group's due date (point 8). Some groups open with no planned due date, such as a top-level group with no predecessor (E2), or ANC visit 2 reached before visit 1. Such a group gives the other steps created with it no due date, and so no deadline rows. They never go `OVERDUE` or `MISSED`. Before groups, every step had a due date (design §2). Giving them `opened_at` instead would make a visit's second step `OVERDUE` minutes after its first. Design §7.1 describes that problem for groups.
-*Decided:* such steps stay unjudged, and show as pending, until E5 fills in a due date (phase 4), if it ever does. Every reader of `step_instance.due_date` must allow null (after phase 2).
+A step created when its group opens takes the group's due date (point 8). That also applied to a step that follows a step outside the group, such as "BP, 7 days after registration". BP took the visit's due date, or none, instead of its own offset. Some groups open with no planned due date, such as a top-level group with no predecessor (E2), or ANC visit 2 reached before visit 1. Such a group gives the other steps created with it no due date, and so no deadline rows. They never go `OVERDUE` or `MISSED`. Before groups, every step had a due date (design §2). Giving them `opened_at` instead would make a visit's second step `OVERDUE` minutes after its first. Design §7.1 describes that problem for groups.
+*Decided:*
+- a step that follows nothing takes the group's due date. With none, it stays unjudged and shows as pending, until E5 fills in a due date (phase 4), if it ever does. Every reader of `step_instance.due_date` must allow null (after phase 2);
+- a step that follows a step outside the group keeps its own offset, like a step in no group. In cycle 0 it is due when the step it follows is done, plus its offset; with several, the latest counts. Its own offset wins over the group's due date;
+- while the step it follows isn't done, it isn't created when the group opens. Progressive instantiation creates it when that step is done;
+- in a later cycle it has no due date, as every step in a later cycle: the offset would already be past.
 
 **30. A predecessor in a repeating group, seen from outside it.** *(B1 + B2 + F1; blocks phase 2)*
 Point 18 reads a predecessor inside the instance it shares with the completed step, and any other predecessor across the enrollment. Once a group repeats, "across the enrollment" sees every cycle. Say a top-level treatment follows the journey's prescription. On 3 Mar the prescription isn't recorded, and its row is still `NOT_STARTED`. On 17 Mar the prescription and then the treatment are recorded in order. But the 3 Mar row is still outstanding, so the treatment raises an `ORDER_VIOLATION`. The other way round, a prescription missing from the 17 Mar visit isn't backfilled, because the 3 Mar visit has one.
@@ -468,7 +472,6 @@ ALTER TABLE intelligence_event_log
 - Accept the `cycle-boundary` extension, with `calendar-day` or `entry-step` (point 5).
 - A `calendar-day` group inside another `calendar-day` group, at any depth, is rejected (point 23). Inside an `entry-step` group it is allowed.
 - An `entry-step` group names its entry step in exactly one `cycle-entry-step` extension. The entry step is a step inside it, directly or in a nested group, with no predecessor inside it (point 5).
-- Warn, without refusing, for a step inside a `calendar-day` group with a non-zero offset to an action outside it (point 26).
 
 **Matcher.**
 - **`calendar-day`:** a new cycle opens for an event whose clinical day is later than the latest cycle's day. The day is taken in the configured zone (point 4). Every other event goes to the latest cycle (points 6 and 12). Only an event opens a cycle. A predecessor completing, or the parent opening, opens none (point 26).
@@ -490,6 +493,7 @@ ALTER TABLE intelligence_event_log
 - Two Consultations in one visit.
 - A `calendar-day` group inside a visit is rejected at load. One inside an `entry-step` group loads (point 23).
 - A `calendar-day` journey following registration opens no cycle until the first visit (point 26).
+- A group's first step that follows a step outside the group is due by its own offset in cycle 0, waits while that step isn't done, and has no due date in a later cycle (point 29).
 - A Consultation following check-in opens no cycle until an event for one of its steps (point 26).
 - A repeated history opens a second Consultation; a repeated examination joins the current one (point 25).
 - Point 18's example: an examination left undone in an earlier visit raises no order violation in a later one.

@@ -673,6 +673,74 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
+    class FirstStepsKeepTheirOwnOffset {
+
+        /** Registration; a visit holding BP, 7 days after registration, and weight, which follows nothing. */
+        private void visitAfterRegistration(Integer visitOffsetDays, String boundary) {
+            PlanDefinition pd = new PlanDefinition();
+            step(pd.addAction(), "registration", "must");
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            if (boundary != null) {
+                repeatingBy(visit, boundary);
+            }
+            if (visitOffsetDays != null) {
+                after(visit, "registration", visitOffsetDays);
+            }
+            after(step(visit.addAction(), "bp", "must"), "registration", 7);
+            step(visit.addAction(), "weight", "must");
+            use(pd);
+        }
+
+        @Test
+        void aStepThatFollowsAStepOutsideTheGroup_isDueByItsOwnOffset() {
+            visitAfterRegistration(null, null);
+
+            record("registration", T0);
+
+            assertEquals(T0.plusDays(7), rowsFor("bp").get(0).getDueDate());
+            assertNull(rowsFor("weight").get(0).getDueDate(), "weight follows nothing: the visit's due date, none");
+        }
+
+        @Test
+        void itsOwnOffsetWins_overTheGroupsDueDate() {
+            visitAfterRegistration(14, null);
+
+            record("registration", T0);
+
+            assertEquals(T0.plusDays(7), rowsFor("bp").get(0).getDueDate());
+            assertEquals(T0.plusDays(14), rowsFor("weight").get(0).getDueDate());
+        }
+
+        @Test
+        void whileTheStepItFollowsIsNotDone_itIsNotCreated_andComesWithItsOwnOffsetWhenItIs() {
+            visitAfterRegistration(null, null);
+
+            record("weight", T0);
+            assertTrue(rowsFor("bp").isEmpty(), "BP waits for registration");
+
+            record("registration", T0.plusDays(1));
+
+            assertEquals(1, rowsFor("bp").size());
+            assertEquals(T0.plusDays(8), rowsFor("bp").get(0).getDueDate());
+            assertEquals(cyclesOf("visit", null).get(0).getId(), groupInstanceIdOf(rowsFor("bp").get(0)));
+        }
+
+        @Test
+        void inAVisitThatRepeatsByDay_onlyTheFirstVisitUsesTheOffset() {
+            visitAfterRegistration(null, "calendar-day");
+            record("registration", T0);
+
+            record("weight", T0.plusDays(3));
+            record("weight", T0.plusDays(10));
+
+            List<StepInstance> bps = rowsFor("bp");
+            assertEquals(2, bps.size());
+            assertEquals(T0.plusDays(7), bps.get(0).getDueDate(), "the first visit: registration + 7 days");
+            assertNull(bps.get(1).getDueDate(), "a later visit has no due date");
+        }
+    }
+
+    @Nested
     class EntryStepFollowsAStepOutsideItsGroup {
 
         /** Group 1 of step 1 and group 2, repeating by entry step, whose entry step follows step 1 by 2 days. */

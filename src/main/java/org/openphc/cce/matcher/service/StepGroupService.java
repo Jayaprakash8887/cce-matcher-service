@@ -361,12 +361,17 @@ public class StepGroupService {
 
     /**
      * Open an instance of a group and create what it holds from the start: its mandatory members with
-     * no predecessor inside the group. Steps are due at the instance's due date; nested groups open their
-     * first instance, except a group that repeats by visit, which only an event opens. An {@code entry-step}
-     * group's entry step, in the group or a nested group, is never created here (see {@link #isAnEntryStep}):
-     * a cycle opened by another of its steps doesn't await it. Later members
-     * arrive through progressive instantiation, with the due dates their own {@code relatedAction}
-     * offsets give them. The caller has checked that this cycle doesn't exist.
+     * no predecessor inside the group.
+     * <ul>
+     *   <li>A step is due at the instance's due date, or by its own offset when it follows a step outside the
+     *       group (see {@link #firstStepDueDate}).</li>
+     *   <li>Nested groups open their first instance, except a group that repeats by visit, which only an event
+     *       opens.</li>
+     *   <li>An {@code entry-step} group's entry step, in the group or a nested group, is never created here
+     *       (see {@link #isAnEntryStep}): a cycle opened by another of its steps doesn't await it.</li>
+     * </ul>
+     * Later members arrive through progressive instantiation, with the due dates their own
+     * {@code relatedAction} offsets give them. The caller has checked that this cycle doesn't exist.
      *
      * @param matchedStepId a step being created by an event, which opening must not create with the
      *                      others; null when there is none
@@ -386,10 +391,15 @@ public class StepGroupService {
             // The matched step is left to its event, which creates it due when the event arrived: created
             // here, it would take this instance's due date, often unknown, and never be judged. An entry step
             // is left to its event, or to the work that expects it.
-            if (!memberStepMetadata.id().equals(matchedStepId) && !isAnEntryStep(enrollment, memberStepMetadata)) {
-                enrollment.add(stepCreationService.createStepRows(enrollment.protocolInstance(), memberStepMetadata,
-                        groupInstance.getDueDate(), groupInstance));
+            if (memberStepMetadata.id().equals(matchedStepId) || isAnEntryStep(enrollment, memberStepMetadata)) {
+                continue;
             }
+            FirstStepDueDate firstStepDueDate = firstStepDueDate(enrollment, memberStepMetadata, groupInstance);
+            if (firstStepDueDate.waits()) {
+                continue; // a step it follows, outside the group, isn't done: created when it is
+            }
+            enrollment.add(stepCreationService.createStepRows(enrollment.protocolInstance(), memberStepMetadata,
+                    firstStepDueDate.dueDate(), groupInstance));
         }
         for (PlanDefinitionParser.GroupMetadata memberGroupMetadata : membersCreatedOnOpen.groups()) {
             // A group that repeats by visit waits for an event of its own: its cycles start when the patient comes.
@@ -472,6 +482,60 @@ public class StepGroupService {
         }
         // No prerequisite has finished: the parent instance's due date, and none for a top-level group.
         return parentGroupInstance != null ? parentGroupInstance.getDueDate() : null;
+    }
+
+    /**
+     * When a step created with {@code groupInstance}, as one of its first members, is due.
+     * <ul>
+     *   <li>A step that follows nothing takes the instance's due date.</li>
+     *   <li>A step that follows a step outside the group keeps its own offset. In cycle 0 it is due when the
+     *       last of the steps it follows was done, plus its offset.</li>
+     *   <li>In a later cycle it has no due date, as the cycle has none: the patient came back, and the offset
+     *       would already be past.</li>
+     *   <li>While a step it follows isn't done, it {@link FirstStepDueDate#waits waits}: it isn't created now.
+     *       Progressive instantiation creates it when that step is done, with its own offset, as for a step
+     *       outside any group.</li>
+     * </ul>
+     * A first member follows nothing inside the group, so every step it follows is outside it.
+     */
+    private FirstStepDueDate firstStepDueDate(Enrollment enrollment, PlanDefinitionParser.StepMetadata stepMetadata,
+                                              StepGroupInstance groupInstance) {
+        PlanDefinitionParser.DependencyGraph graph = enrollment.protocol().dependencyGraph();
+        OffsetDateTime latestDueDate = null;
+        for (String prerequisiteId : graph.predecessorsOf(stepMetadata.id())) {
+            PlanDefinitionParser.RelatedStepInfo edge = graph.successorsOf(prerequisiteId).stream()
+                    .filter(stepDependency -> stepDependency.step().id().equals(stepMetadata.id()))
+                    .map(PlanDefinitionParser.StepDependency::edge)
+                    .findFirst()
+                    .orElse(null);
+            if (edge == null) {
+                continue;
+            }
+            PrerequisiteProgress progress = prerequisiteProgress(enrollment, prerequisiteId, groupInstance);
+            if (progress.finishedAt() == null) {
+                return FirstStepDueDate.WAITS;
+            }
+            OffsetDateTime baseTime = "after-start".equals(edge.relationship()) && progress.startedAt() != null
+                    ? progress.startedAt()
+                    : progress.finishedAt();
+            OffsetDateTime dueDate = StepCreationService.calculateDueDate(baseTime, edge);
+            if (latestDueDate == null || dueDate.isAfter(latestDueDate)) {
+                latestDueDate = dueDate;
+            }
+        }
+        if (latestDueDate == null) {
+            return new FirstStepDueDate(false, groupInstance.getDueDate()); // follows nothing
+        }
+        return new FirstStepDueDate(false, groupInstance.getCycleIndex() == FIRST_CYCLE ? latestDueDate : null);
+    }
+
+    /**
+     * When a group's first member is due, or that it {@code waits} for a step it follows to be done.
+     *
+     * @param dueDate the step's due date; null for none
+     */
+    private record FirstStepDueDate(boolean waits, OffsetDateTime dueDate) {
+        static final FirstStepDueDate WAITS = new FirstStepDueDate(true, null);
     }
 
     /** Where a prerequisite stands: in flight, finished (with when it started and finished), or neither. */
