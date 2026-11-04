@@ -608,7 +608,7 @@ Taken up once phase 2 is implemented. Together with phases 1 and 2, it makes up 
 - **Closing an incomplete instance** also closes its open nested instances, repeating or not. Each gets the parent's `closed_at`. No new inner cycles open in it.
 - **Late work in a closed instance** (A2, design §7.4): the step still completes. If that completes the instance, `completed_at` is set. `closed_at` and `sla_status` don't change, and no dependents are created inside it.
 - **Order violations:** a step in a closed instance is no longer outstanding (point 18).
-- **What follows a group:** opens when the group completes or closes. "After-start" counts from the group's `due_date`, or `opened_at` if it has none. "After-end" counts from its `completed_at`, or its `closed_at` if it closed without completing (point 7).
+- **What follows a group:** opens when the group completes or closes. "After-end", the only supported relationship, counts from its `completed_at`, or its `closed_at` if it closed without completing (point 7).
 - **E5 fill-in** happens when a predecessor completes, or when a predecessor that is a group closes (point 8). It fills in:
   - the group's due date;
   - the due dates and deadline rows of the steps created with it that have none;
@@ -645,7 +645,7 @@ Taken up once phase 2 is implemented. Together with phases 1 and 2, it makes up 
   - by the last unsettled member completing after the others were written off;
   - late work after closure sets `completed_at` only.
 - **E3:** opening a visit closes the previous one, and its open Consultation with it.
-- **What follows a group:** after-start and after-end, from a completed group and from a closed one.
+- **What follows a group:** after-end, from a completed group and from a closed one.
 - **E5:**
   - fill-in on a predecessor's completion and on a group predecessor's closure, with the steps created with the group getting their due dates and deadline rows;
   - a group's deadline rows are written when its due date is filled in;

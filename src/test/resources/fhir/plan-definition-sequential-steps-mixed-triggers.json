@@ -73,7 +73,7 @@
       "relatedAction": [
         {
           "actionId": "visit-encounter",
-          "relationship": "after-start",
+          "relationship": "after-end",
           "offsetDuration": {
             "value": 0,
             "unit": "d",

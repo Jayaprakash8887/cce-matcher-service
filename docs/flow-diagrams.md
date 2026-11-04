@@ -468,7 +468,7 @@ flowchart TD
 
 ### Dependent Step Creation on Completion
 
-`relatedAction` is a **relative** pointer. A step states how it sits against another, from either end (`after-*` or `before-*`). So the forward direction needed here comes from the normalized graph built by `PlanDefinitionParser.buildDependencyGraph()`.
+A `relatedAction` is written on the later step, and names the step it follows, with `after-end`, the only supported relationship. So the steps that follow a completed step come from the graph built by `PlanDefinitionParser.buildDependencyGraph()`.
 
 When any step completes, progressive instantiation (`ProgressiveInstantiationService.instantiateDependents()`) does two things:
 
@@ -477,7 +477,7 @@ When any step completes, progressive instantiation (`ProgressiveInstantiationSer
 
 ```mermaid
 flowchart TD
-    START["instantiateDependents(enrollment, completedStepInstance)"] --> FIND["graph.successorsOf(completed step):<br/>steps ordered after it by either an after-* edge<br/>of their own or a before-* edge on the completed step"]
+    START["instantiateDependents(enrollment, completedStepInstance)"] --> FIND["graph.successorsOf(completed step):<br/>the steps whose relatedAction<br/>names the completed step"]
     FIND --> LOOP{"For each dependent step"}
     LOOP --> MUST{"dependent step's<br/>requiredBehavior == must?"}
     MUST -->|"No (could / unspecified)"| SKIP2["Skip pre-creation — a dangling row could later go<br/>MISSED even though its event never arrives;<br/>created on the fly if its own trigger fires"]
@@ -487,7 +487,7 @@ flowchart TD
     GROUP -->|"No — a calendar-day group<br/>with no cycle yet"| SKIP4["Skip — only an event of its own<br/>opens a calendar-day cycle"]
     GROUP -->|"Yes, or outside any group"| DEDUP{"A step instance for this step already<br/>exists where it would go?"}
     DEDUP -->|"Yes"| SKIP["Skip — avoid duplicate<br/>(created reactively via its own trigger,<br/>by a redelivered predecessor, or by its group opening)"]
-    DEDUP -->|"No"| CALC["Calculate due date from the dependent step's own<br/>offset + relationship<br/>(after-end → completedAt [clinical time], after-start → dueDate)"]
+    DEDUP -->|"No"| CALC["Calculate due date from the dependent step's own<br/>offset + relationship<br/>(after-end → completedAt [clinical time];<br/>after-start, only in protocols stored earlier → dueDate)"]
     CALC --> RECURRING{"TimingInfo.count > 1?"}
 
     RECURRING -->|"Yes"| MULTI["Create N recurring instances with staggered due dates"]

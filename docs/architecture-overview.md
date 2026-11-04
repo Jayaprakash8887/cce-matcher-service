@@ -863,22 +863,16 @@ All execution and evaluation context is stored in a single row — no FK constra
 
 Nested `PlanDefinition.action.action[]` entries with type `"step"` are **flattened** into peer-level steps at parse time by `extractSteps()`. There is no parent-child hierarchy between steps. All steps (top-level and nested) are stored uniformly in `step_instance` without any `parent_step_id`. Relationships between steps are expressed exclusively via `relatedSteps` (derived from FHIR `relatedAction`). The one exception is an action with `groupingBehavior: logical-group`. It is a step group, not a step, and is never flattened into one (§6.5).
 
-**Direction of `relatedAction`:** it is a **relative** pointer. `relationship` describes the *declaring* action's relationship to the referenced one. So which of the two comes first depends on the family (`PlanDefinitionParser.classifyRelationship`):
+**How `relatedAction` sets the order.** A `relatedAction` is written on the later step, and names the step it follows. For example, `{"id": "lab-results", "relatedAction": [{"actionId": "lab-order", "relationship": "after-end", "offsetDuration": "3d"}]}` reads: lab-results is due 3 days after lab-order is done.
+- **`after-end` is the only supported relationship,** and the default: a `relatedAction` with no `relationship` means `after-end`.
+- **Any other relationship is refused at load** (`PlanDefinitionParser.validateRelationships`): `after`, `after-start`, `before-*` and `concurrent-*`.
+- **Protocols stored before that check keep working.** The matcher still reads the old relationships as it always did. A `before-*` is read from the other step, an `after-start` counts from the earlier step's due date, and a `concurrent-*` sets no order.
 
-| Family | Example | Reads as | Prerequisite |
-|---|---|---|---|
-| `after`, `after-start`, `after-end`, *absent* | `{"id": "lab-results", "relatedAction": [{"actionId": "lab-order", "relationship": "after-end", "offsetDuration": "3d"}]}` | lab-results happens 3 days after lab-order ends | the **referenced** action (`lab-order`) |
-| `before`, `before-start`, `before-end` | `{"id": "visit-encounter", "relatedAction": [{"actionId": "vitals-recording", "relationship": "before"}]}` | visit-encounter happens before vitals-recording | the **declaring** action (`visit-encounter`) |
-| `concurrent*` | — | the two happen together | none — **no ordering** |
+`PlanDefinitionParser.buildDependencyGraph()` turns the `relatedAction`s into one graph of which step follows which. It can be read both ways:
+- `successorsOf`: the steps that follow a step. Progressive instantiation uses it when a step is done.
+- `predecessorsOf`: the steps a step follows. Order checks and backfill use it.
 
-Both ordering families are normalized into one directed graph by `PlanDefinitionParser.buildDependencyGraph()`. It exposes the graph in both directions:
-
-- `successorsOf`, for progressive instantiation, which works forward from a completed step
-- `predecessorsOf`, for order checks and ancestor walks
-
-Every normalized edge is expressed the `after-*` way round, so consumers handle only one form. `before-*` carries no start/end distinction that survives the flip. There is no "before the prerequisite started". So it normalizes to `after-end`. The dependent is scheduled from the prerequisite's completion, offset by the same duration.
-
-`concurrent*` edges and edges naming an action the definition does not declare establish nothing. Both are inert. Reporting them at load time is the CCE Protocol Service's responsibility. `PlanDefinitionParser.findUnorderedRelationships` / `findDanglingRelatedActions` exist for that purpose. So an author who expected one to sequence steps gets told, instead of silently getting a disconnected graph.
+A `relatedAction` naming an action the protocol doesn't have sets no order. The Protocol Service warns about it at load (`PlanDefinitionParser.findDanglingRelatedActions`), so an author who expected it to order the steps finds out.
 
 **Key design decisions:**
 - `StepMetadata` is a flat record with 9 fields (no `subSteps` list): `id`, `title`, `triggers`, `relatedSteps`, `timing`, `toleranceDays`, `requiredBehavior`, `intelligenceActions`, `groupId`

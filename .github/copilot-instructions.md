@@ -52,8 +52,9 @@ Documentation is not duplicated between repositories. Start here:
    exist without its schedule, or its deadlines are invisible forever.
 3. **Never update a transition row after inserting it.** Claim and processing columns belong to the
    Step SLA Service.
-4. **`relatedAction` names a step's prerequisite, not its successor**, and both `after-*` and
-   `before-*` families occur in real protocols. Getting this backwards inverts every dependency —
+4. **`relatedAction` names a step's prerequisite, not its successor.** Only `after-end` (or no
+   relationship) loads; protocols stored earlier may still hold `after-start`, `before-*` or
+   `concurrent-*`, which the code still reads. Getting the direction backwards inverts every dependency —
    see `../cce-common-util/docs/fhir-conformance.md#1-relatedaction-direction`.
 5. **Resource type comes from `data.resourceType` in the payload**, never from the CloudEvents
    envelope `type`.
