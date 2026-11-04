@@ -790,6 +790,7 @@ flowchart LR
 
 Each **intelligence action** (`PlanDefinition.action.action`) contains:
 - `id` — unique identifier (mapped to `stepActionId` in `intelligence_event_log`)
+- `type` — **required** coding `fire-event`, with the HL7 system `http://terminology.hl7.org/CodeSystem/action-type`. The step it belongs to has `step`, with the CCE system `http://openphc.org/fhir/CodeSystem/action-type`. An action without a `type` is rejected at load
 - `condition[kind=applicability]` — JSONLogic/FHIRPath expression evaluated against step runtime state
 - `definitionCanonical` — reference to an `ActivityDefinition` that defines the action to take
 - `extension` — **required** severity and destination metadata (rejected at parse time if missing)
@@ -800,10 +801,16 @@ Each **intelligence action** (`PlanDefinition.action.action`) contains:
 {
   "id": "anc-visit-2",
   "title": "ANC Visit 2",
+  "type": {
+    "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }]
+  },
   "trigger": [{ "..." : "..." }],
   "action": [
     {
       "id": "anc-visit-2-missed-escalation",
+      "type": {
+        "coding": [{ "system": "http://terminology.hl7.org/CodeSystem/action-type", "code": "fire-event" }]
+      },
       "condition": [{
         "kind": "applicability",
         "expression": {
