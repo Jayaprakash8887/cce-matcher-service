@@ -22,7 +22,7 @@ Phases 1 and 2 are all required before production. So are the data-pipeline, ins
 |---|---|---|
 | A1 | (a) Same verdict | A group with a deadline goes `OVERDUE` / `MISSED` whether the patient came and left work undone or never came. The group deviation's metadata lists the member steps that weren't completed. |
 | A2 | (b) Verdict only | Reports show the group's `sla_status`. The matcher still records `completed_at` when late work completes a closed group; reports don't show it. |
-| A3 | (b) Optional groups allowed | An optional group doesn't open with its parent, or when a step it follows completes. It opens when one of its steps is matched, or when work creates one of its `must` steps (point 11). Once it is open, its `must` steps become mandatory within it and are created. It never counts towards its parent's completion, started or not (point 11). It can't carry `tolerance-days`. |
+| A3 | (b) Optional groups allowed | For now every group is optional: a group can't declare `requiredBehavior`, and mandatory groups come in a later phase (point 11). An optional group doesn't open with its parent, or when a step it follows completes. It opens when one of its steps is matched, or when work creates one of its `must` steps (point 11). Once it is open, its `must` steps become mandatory within it and are created. It never counts towards its parent's completion, started or not (point 11). It can't carry `tolerance-days`. |
 | A4 | (b) Approximate | ANC protocols set visit due dates as offsets from a registration step. No code change. |
 | B1 | (b) Inner repeats allowed | An inner group may repeat within one instance of its outer group. Its cycles are numbered within that instance. |
 | B2 | (b) Calendar day | For a visit-driven group, an event opens a new cycle if its clinical day is later than the latest cycle's. The clinical day is taken in the deployment's time zone (point 4). Any other event goes to the latest cycle (F1, point 6). |
@@ -177,6 +177,11 @@ C1 says the group's deadline wins over a step's. Say ANC visit 2 has a deadline 
 
 **11. Optional groups and completion.** *(A3; blocks phases 1 and 4)*
 *Decided:*
+- for now, every group is optional. A group can't declare `requiredBehavior`: `validateGroups` refuses one at load, after the permanent rules, as a phase gate. Its steps keep their own `requiredBehavior`. Mandatory groups come in a later phase, not yet scheduled. Their code stays (`membersCreatedOnOpen`, `openFollowingGroup`), and their tests are disabled until the gate lifts (`ClinicVisit`, `TwoPrerequisites`, `NestedGroupFollowsAStepOutsideItsParent`).
+
+  What this means for now: no group opens with its parent, and none opens when a step it follows completes. A group's own `relatedAction` only plans its due date. To have a group's steps expected after an earlier step, put the `relatedAction` on those steps. Example: `visit-2 { bp, 6 weeks after registration; weight, 6 weeks after registration }`. When registration completes, BP and weight are created, due 6 weeks later, and that work opens `visit-2`.
+
+  Decided on 2026-11-05, at the customer's request. Until then, a group could declare `must`;
 - an optional group doesn't open on its own account. Its parent opening doesn't open it, and neither does a step that the group itself follows (`openFollowingGroup`). It opens in two ways:
   - an event for one of its steps, as optional steps are today (phase 1);
   - work for one of its `must` steps (`groupInstanceForWork`). That is progressive instantiation, when the step follows a step outside the group that has completed, or backfill, when the step is a skipped mandatory predecessor. The step is mandatory, so it is expected even though its group is optional. The group then creates its first members, like any group.
@@ -316,7 +321,7 @@ A step created when its group opens takes the group's due date (point 8). That a
 - while the step it follows isn't done, it isn't created when the group opens. Progressive instantiation creates it when that step is done;
 - in a later cycle it has no due date, as every step in a later cycle: the offset would already be past;
 - "A later cycle" is a later cycle of the step's own group or of any group around it, up to the group that also holds the step it follows. Example: in `visit [calendar-day] { imaging { scan, 7 days after registration } }`, `imaging` is cycle 0 in every visit, but a later visit is still a later cycle, so its `scan` has no due date. In `pregnancy [entry-step: registration] { registration; visit [calendar-day] { bp, 7 days after registration } }`, each pregnancy holds its own registration, so the next pregnancy's first visit is not a later cycle for `bp`;
-- a nested group that follows a step outside its parent follows the same rule as a step. It doesn't open with its parent while that step isn't done. It opens when that step is done, due by its own offset, even in a later cycle of its parent, because the offset is then still ahead. When it opens with a parent in a later cycle, it has no due date, and nor do its first steps. Example: `visit [calendar-day] { lab, 7 days after registration { lab-order } }`. Before this, `lab` opened with every visit, and in every visit it took registration + 7 days, so a later visit's `lab-order` was overdue as soon as it was created (decided 2026-11-05).
+- *for a mandatory group, in the later phase (see point 11):* a nested group that follows a step outside its parent follows the same rule as a step. It doesn't open with its parent while that step isn't done. It opens when that step is done, due by its own offset, even in a later cycle of its parent, because the offset is then still ahead. When it opens with a parent in a later cycle, it has no due date, and nor do its first steps. Example: `visit [calendar-day] { lab, 7 days after registration { lab-order } }`. Before this, `lab` opened with every visit, and in every visit it took registration + 7 days, so a later visit's `lab-order` was overdue as soon as it was created (decided 2026-11-05). For now, with every group optional, the due-date part already applies: a nested group opened by an event or by work in a later cycle of its parent has no due date, and nor do its first steps (`OptionalNestedGroupFollowsAStepOutsideItsParent`).
 
 **30. A predecessor in a repeating group, seen from outside it.** *(B1 + B2 + F1; blocks phase 2)*
 Point 18 reads a predecessor inside the instance it shares with the completed step, and any other predecessor across the enrollment. Once a group repeats, "across the enrollment" sees every cycle. Say a top-level treatment follows the journey's prescription. On 3 Mar the prescription isn't recorded, and its row is still `NOT_STARTED`. On 17 Mar the prescription and then the treatment are recorded in order. But the 3 Mar row is still outstanding, so the treatment raises an `ORDER_VIOLATION`. The other way round, a prescription missing from the 17 Mar visit isn't backfilled, because the 3 Mar visit has one.
@@ -383,6 +388,7 @@ Protocol completion (D3) is not part of this plan.
     - no `tolerance-days` on an optional group;
     - no `tolerance-days` on a group with `cycle-boundary` (point 19).
   - **Phase gates:** reject
+    - `requiredBehavior` on a group, so every group is optional (point 11; added 2026-11-05, lifted in a later phase);
     - `timing` on a group;
     - `tolerance-days` on a group;
     - the `cycle-boundary` extension;

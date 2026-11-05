@@ -689,29 +689,30 @@ A step group is a set of steps that belong together clinically, such as one ante
 
 The group itself is never matched to an event. Only its steps are. How the Matcher Service opens and tracks a group is in [Architecture Overview §6.5](architecture-overview.md#65-step-groups).
 
+**For now, every group is optional.** A group can't declare `requiredBehavior`; the Protocol Service refuses one at load. Mandatory groups come in a later phase. So a group never opens with its parent, or when a step it follows completes. It opens on an event for one of its steps, or when work creates one of its `must` steps. To have a group's steps expected after an earlier step, put the `relatedAction` on those steps, as below.
+
 ```json
 {
   "id": "anc-visit-2",
   "title": "ANC visit 2",
   "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
   "groupingBehavior": "logical-group",
-  "requiredBehavior": "must",
-  "relatedAction": [
-    {
-      "actionId": "anc-registration",
-      "relationship": "after-end",
-      "offsetDuration": {
-        "value": 6, "unit": "wk",
-        "system": "http://unitsofmeasure.org", "code": "wk"
-      }
-    }
-  ],
   "action": [
     {
       "id": "anc2-bp",
       "title": "Blood pressure",
       "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
       "requiredBehavior": "must",
+      "relatedAction": [
+        {
+          "actionId": "anc-registration",
+          "relationship": "after-end",
+          "offsetDuration": {
+            "value": 6, "unit": "wk",
+            "system": "http://unitsofmeasure.org", "code": "wk"
+          }
+        }
+      ],
       "extension": [
         { "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days", "valueInteger": 14 }
       ],
@@ -726,6 +727,16 @@ The group itself is never matched to an event. Only its steps are. How the Match
       "title": "Body weight",
       "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
       "requiredBehavior": "must",
+      "relatedAction": [
+        {
+          "actionId": "anc-registration",
+          "relationship": "after-end",
+          "offsetDuration": {
+            "value": 6, "unit": "wk",
+            "system": "http://unitsofmeasure.org", "code": "wk"
+          }
+        }
+      ],
       "extension": [
         { "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days", "valueInteger": 14 }
       ],
@@ -751,9 +762,10 @@ The group itself is never matched to an event. Only its steps are. How the Match
 ```
 
 What this example does, given a mandatory `anc-registration` step elsewhere in the PlanDefinition:
-- **When registration completes,** the visit opens with a planned due date six weeks later. Its mandatory steps with no predecessor inside the group are BP and weight. They are created with that due date. With their own `tolerance-days`, they can go `OVERDUE` and then `MISSED`.
+- **When registration completes,** BP and weight are created, due six weeks later. Each is a `must` step whose `relatedAction` names registration. Creating them opens the visit. With their own `tolerance-days`, they can go `OVERDUE` and then `MISSED`.
+- **The visit declares no `requiredBehavior`,** so it is optional, as every group is for now. Had the `relatedAction` been on the visit instead of its steps, registration completing would open nothing: it would only plan the visit's due date. BP and weight would then not be expected until the patient came.
 - **Counselling is optional,** so it is never created in advance. It is created only when its own event arrives.
-- **If a BP event arrives before registration,** the visit opens then, with no planned due date. Weight is then created without a due date or deadline, and is never judged.
+- **If a BP event arrives before registration,** the visit opens then, and registration is backfilled, awaiting. Weight waits on registration, so it isn't created yet. When registration is done, weight is created, due six weeks later.
 - **A second BP event** after the first is recorded as a further completed row in the same visit.
 
 **Repeating by visit.** A group repeats in cycles when it carries the `cycle-boundary` extension. Below is a patient journey with one cycle per visit day. It holds a Consultation that can happen twice in one visit. Triggers are left out:
@@ -763,7 +775,6 @@ What this example does, given a mandatory `anc-registration` step elsewhere in t
   "id": "journey",
   "title": "Patient journey",
   "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
-  "requiredBehavior": "must",
   "groupingBehavior": "logical-group",
   "extension": [
     { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary", "valueCode": "calendar-day" }
@@ -774,7 +785,6 @@ What this example does, given a mandatory `anc-registration` step elsewhere in t
       "id": "consultation",
       "title": "Consultation",
       "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
-      "requiredBehavior": "must",
       "groupingBehavior": "logical-group",
       "extension": [
         { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",   "valueCode": "entry-step" },
@@ -805,7 +815,6 @@ What this example does:
   "id": "consultation",
   "title": "Consultation",
   "type": { "coding": [{ "system": "http://openphc.org/fhir/CodeSystem/action-type", "code": "step" }] },
-  "requiredBehavior": "must",
   "groupingBehavior": "logical-group",
   "extension": [
     { "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",   "valueCode": "entry-step" },
@@ -829,8 +838,9 @@ What this example does:
 The Protocol Service rejects at load:
 
 - a group that has a trigger or no step
+- `requiredBehavior` on a group: every group is optional for now
 - a group with a `selectionBehavior` other than `all`
-- `tolerance-days` on an optional group or on a group with `cycle-boundary`
+- `tolerance-days` on a group
 - a `cycle-boundary` code other than `calendar-day` or `entry-step`
 - a `calendar-day` group inside another `calendar-day` group, at any depth
 - an `entry-step` group that:

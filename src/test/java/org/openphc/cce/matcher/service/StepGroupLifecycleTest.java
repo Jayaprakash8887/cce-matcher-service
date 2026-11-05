@@ -12,6 +12,7 @@ import org.hl7.fhir.r4.model.PlanDefinition.ActionRequiredBehavior;
 import org.hl7.fhir.r4.model.PlanDefinition.PlanDefinitionActionComponent;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -163,13 +164,21 @@ class StepGroupLifecycleTest {
         action.getType().addCoding(new Coding()
                 .setSystem("http://openphc.org/fhir/CodeSystem/action-type")
                 .setCode("step"));
-        action.setRequiredBehavior(ActionRequiredBehavior.fromCode(requiredBehavior));
+        if (requiredBehavior != null) {
+            action.setRequiredBehavior(ActionRequiredBehavior.fromCode(requiredBehavior));
+        }
         return action;
     }
 
-    private static PlanDefinitionActionComponent group(PlanDefinitionActionComponent action, String id,
-                                                       String requiredBehavior) {
-        step(action, id, requiredBehavior).setGroupingBehavior(ActionGroupingBehavior.LOGICALGROUP);
+    /** A step group. It declares no requiredBehavior: every group is optional for now (plan point 11). */
+    private static PlanDefinitionActionComponent group(PlanDefinitionActionComponent action, String id) {
+        step(action, id, null).setGroupingBehavior(ActionGroupingBehavior.LOGICALGROUP);
+        return action;
+    }
+
+    /** A mandatory step group, for the later phase that allows one. Used only by disabled tests until then. */
+    private static PlanDefinitionActionComponent mandatoryGroup(PlanDefinitionActionComponent action, String id) {
+        step(action, id, "must").setGroupingBehavior(ActionGroupingBehavior.LOGICALGROUP);
         return action;
     }
 
@@ -258,7 +267,7 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent review = group(pd.addAction(), "review", "must");
+            PlanDefinitionActionComponent review = group(pd.addAction(), "review");
             step(review.addAction(), "vitals", "must");
             after(step(review.addAction(), "hba1c", "must"), "vitals", 3);
             step(review.addAction(), "consult", "could");
@@ -312,30 +321,33 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             step(pd.addAction(), "registration", "must");
-            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit-2", "must");
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit-2");
             after(visit, "registration", 42);
             step(visit.addAction(), "bp", "must");
             step(visit.addAction(), "weight", "must");
             step(visit.addAction(), "counselling", "could");
-            PlanDefinitionActionComponent nutrition = group(visit.addAction(), "nutrition", "could");
+            PlanDefinitionActionComponent nutrition = group(visit.addAction(), "nutrition");
             step(nutrition.addAction(), "diet", "must");
-            PlanDefinitionActionComponent followUp = group(pd.addAction(), "follow-up", "could");
+            PlanDefinitionActionComponent followUp = group(pd.addAction(), "follow-up");
             after(followUp, "registration", 7);
             step(followUp.addAction(), "call", "must");
             use(pd);
         }
 
         @Test
-        void aGroupFollowingAStepOpensWhenTheStepCompletes_withItsPlannedDueDate() {
+        void aGroupFollowingAStepOpensOnAnEventForOneOfItsSteps_withItsPlannedDueDate() {
             record("registration", T0);
+            assertTrue(groupInstanceOf("visit-2").isEmpty(),
+                    "every group is optional for now: a step it follows completing opens none");
+
+            record("weight", T0.plusDays(41));
 
             StepGroupInstance visit = groupInstanceOf("visit-2").orElseThrow();
             assertEquals(T0.plusDays(42), visit.getDueDate());
             assertEquals(List.of(T0.plusDays(42)), rowsFor("bp").stream().map(StepInstance::getDueDate).toList());
-            assertEquals(1, rowsFor("weight").size());
             assertTrue(rowsFor("counselling").isEmpty(), "optional steps are never created in advance");
-            assertTrue(groupInstanceOf("nutrition").isEmpty(), "optional groups are never opened in advance");
-            assertTrue(groupInstanceOf("follow-up").isEmpty(), "nor when they follow a step that completed");
+            assertTrue(groupInstanceOf("nutrition").isEmpty(), "nor are nested groups, all optional for now");
+            assertTrue(groupInstanceOf("follow-up").isEmpty());
         }
 
         @Test
@@ -390,6 +402,7 @@ class StepGroupLifecycleTest {
         @Test
         void anEventForAStepAlreadyCreatedByItsGroupCompletesThatRow() {
             record("registration", T0);
+            record("weight", T0.plusDays(40));
             StepInstance created = rowsFor("bp").get(0);
 
             StepInstance completed = record("bp", T0.plusDays(41));
@@ -407,7 +420,7 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit");
             step(visit.addAction(), "bp", "must");
             step(visit.addAction(), "weight", "must");
             use(pd);
@@ -458,9 +471,9 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent journey = group(pd.addAction(), "journey", "must");
+            PlanDefinitionActionComponent journey = group(pd.addAction(), "journey");
             step(journey.addAction(), "check-in", "must");
-            PlanDefinitionActionComponent consultation = group(journey.addAction(), "consultation", "must");
+            PlanDefinitionActionComponent consultation = group(journey.addAction(), "consultation");
             after(consultation, "check-in", 0);
             step(consultation.addAction(), "history", "must");
             after(step(consultation.addAction(), "examination", "must"), "history", 0);
@@ -470,13 +483,17 @@ class StepGroupLifecycleTest {
         @Test
         void aNestedGroupOpensInsideItsParentsGroupInstance() {
             record("check-in", T0);
+            assertTrue(groupInstanceOf("consultation").isEmpty(), "an optional group doesn't open with its parent");
+
+            record("history", T0.plusMinutes(20));
 
             StepGroupInstance journey = groupInstanceOf("journey").orElseThrow();
             StepGroupInstance consultation = groupInstanceOf("consultation").orElseThrow();
             assertEquals(journey.getId(), consultation.getParentGroupInstance().getId());
-            assertEquals(T0, consultation.getDueDate());
+            assertEquals(T0, consultation.getDueDate(), "planned from check-in, the step it follows");
             assertEquals(consultation.getId(), groupInstanceIdOf(rowsFor("history").get(0)));
-            assertTrue(rowsFor("examination").isEmpty(), "examination waits for history");
+            assertEquals(consultation.getId(), groupInstanceIdOf(rowsFor("examination").get(0)),
+                    "examination follows history, in the same consultation");
         }
 
         @Test
@@ -510,9 +527,9 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent group1 = group(pd.addAction(), "group-1", "must");
-            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
-            PlanDefinitionActionComponent group3 = repeatingBy(group(group2.addAction(), "group-3", "must"), "calendar-day");
+            PlanDefinitionActionComponent group1 = group(pd.addAction(), "group-1");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2");
+            PlanDefinitionActionComponent group3 = repeatingBy(group(group2.addAction(), "group-3"), "calendar-day");
             step(group3.addAction(), "step-1", "must");
             use(pd);
         }
@@ -543,9 +560,9 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "calendar-day");
-            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
-            PlanDefinitionActionComponent group3 = namingEntryStep(repeatingBy(group(group2.addAction(), "group-3", "must"), "entry-step"), "step-1");
+            PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1"), "calendar-day");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2");
+            PlanDefinitionActionComponent group3 = namingEntryStep(repeatingBy(group(group2.addAction(), "group-3"), "entry-step"), "step-1");
             step(group3.addAction(), "step-1", "must");
             use(pd);
         }
@@ -572,8 +589,8 @@ class StepGroupLifecycleTest {
     @Test
     void aGroupInsideACalendarDayGroupCannotRepeatByCalendarDay() {
         PlanDefinition pd = new PlanDefinition();
-        PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1", "must"), "calendar-day");
-        PlanDefinitionActionComponent group2 = repeatingBy(group(group1.addAction(), "group-2", "must"), "calendar-day");
+        PlanDefinitionActionComponent group1 = repeatingBy(group(pd.addAction(), "group-1"), "calendar-day");
+        PlanDefinitionActionComponent group2 = repeatingBy(group(group1.addAction(), "group-2"), "calendar-day");
         step(group2.addAction(), "step-1", "must");
 
         assertThrows(IllegalArgumentException.class, () -> use(pd));
@@ -590,9 +607,9 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             PlanDefinitionActionComponent pregnancy =
-                    namingEntryStep(repeatingBy(group(pd.addAction(), "pregnancy", "must"), "entry-step"), "registration");
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "pregnancy"), "entry-step"), "registration");
             step(pregnancy.addAction(), "registration", "must");
-            PlanDefinitionActionComponent visit = repeatingBy(group(pregnancy.addAction(), "visit", "must"), "calendar-day");
+            PlanDefinitionActionComponent visit = repeatingBy(group(pregnancy.addAction(), "visit"), "calendar-day");
             step(visit.addAction(), "bp", "must");
             use(pd);
         }
@@ -629,7 +646,7 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             PlanDefinitionActionComponent consultation =
-                    namingEntryStep(repeatingBy(group(pd.addAction(), "consultation", "must"), "entry-step"), "history");
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "consultation"), "entry-step"), "history");
             step(consultation.addAction(), "history", "must");
             step(consultation.addAction(), "bp", "must");
             use(pd);
@@ -680,7 +697,7 @@ class StepGroupLifecycleTest {
         private void visitAfterRegistration(Integer visitOffsetDays, String boundary) {
             PlanDefinition pd = new PlanDefinition();
             step(pd.addAction(), "registration", "must");
-            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit");
             if (boundary != null) {
                 repeatingBy(visit, boundary);
             }
@@ -753,10 +770,10 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             step(pd.addAction(), "registration", "must");
-            PlanDefinitionActionComponent lab = group(pd.addAction(), "lab", "could");
+            PlanDefinitionActionComponent lab = group(pd.addAction(), "lab");
             after(step(lab.addAction(), "lab-order", "must"), "registration", 3);
             step(lab.addAction(), "lab-note", "must");
-            PlanDefinitionActionComponent review = group(pd.addAction(), "review", "could");
+            PlanDefinitionActionComponent review = group(pd.addAction(), "review");
             after(review, "registration", 0);
             step(review.addAction(), "review-note", "must");
             after(step(pd.addAction(), "follow-up", "must"), "lab-order", 0);
@@ -784,6 +801,7 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
+    @Disabled("Mandatory groups come in a later phase (plan point 11). Re-enable when the load check on a group's requiredBehavior is lifted.")
     class NestedGroupFollowsAStepOutsideItsParent {
 
         /**
@@ -794,12 +812,12 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             step(pd.addAction(), "registration", "must");
-            PlanDefinitionActionComponent visit = repeatingBy(group(pd.addAction(), "visit", "must"), "calendar-day");
+            PlanDefinitionActionComponent visit = repeatingBy(group(pd.addAction(), "visit"), "calendar-day");
             step(visit.addAction(), "weight", "must");
-            PlanDefinitionActionComponent lab = group(visit.addAction(), "lab", "must");
+            PlanDefinitionActionComponent lab = mandatoryGroup(visit.addAction(), "lab");
             after(lab, "registration", 7);
             step(lab.addAction(), "lab-order", "must");
-            PlanDefinitionActionComponent imaging = group(visit.addAction(), "imaging", "must");
+            PlanDefinitionActionComponent imaging = mandatoryGroup(visit.addAction(), "imaging");
             after(step(imaging.addAction(), "scan", "must"), "registration", 7);
             use(pd);
         }
@@ -852,6 +870,73 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
+    class OptionalNestedGroupFollowsAStepOutsideItsParent {
+
+        /**
+         * Registration; a visit repeating by calendar day, holding weight; a lab group 7 days after registration
+         * (lab-order, lab-note); and an imaging group whose scan is 7 days after registration (scan, report).
+         * Every group is optional, so lab and imaging open only on an event for one of their steps.
+         */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            step(pd.addAction(), "registration", "must");
+            PlanDefinitionActionComponent visit = repeatingBy(group(pd.addAction(), "visit"), "calendar-day");
+            step(visit.addAction(), "weight", "must");
+            PlanDefinitionActionComponent lab = group(visit.addAction(), "lab");
+            after(lab, "registration", 7);
+            step(lab.addAction(), "lab-order", "must");
+            step(lab.addAction(), "lab-note", "must");
+            PlanDefinitionActionComponent imaging = group(visit.addAction(), "imaging");
+            after(step(imaging.addAction(), "scan", "must"), "registration", 7);
+            step(imaging.addAction(), "report", "must");
+            use(pd);
+        }
+
+        @Test
+        void aGroupThatFollowsAStepStaysClosed_aGroupWhoseMustStepFollowsItOpens() {
+            record("weight", T0);
+            assertTrue(cyclesOf("lab", visitOf(0)).isEmpty(), "an optional group doesn't open with its parent");
+            assertTrue(cyclesOf("imaging", visitOf(0)).isEmpty());
+
+            record("registration", T0.plusHours(1));
+
+            assertTrue(cyclesOf("lab", visitOf(0)).isEmpty(), "lab itself follows registration: that opens nothing");
+            assertEquals(1, cyclesOf("imaging", visitOf(0)).size(), "scan, a must step, follows it: its work opens imaging");
+            assertEquals(T0.plusHours(1).plusDays(7), rowsFor("scan").get(0).getDueDate());
+        }
+
+        @Test
+        void openedByAnEventInTheFirstVisit_theyAreDueByTheirOwnOffset() {
+            record("registration", T0);
+            record("weight", T0.plusDays(1));
+            record("lab-order", T0.plusDays(1).plusHours(1));
+            record("report", T0.plusDays(1).plusHours(2));
+
+            assertEquals(T0.plusDays(7), cyclesOf("lab", visitOf(0)).get(0).getDueDate());
+            assertEquals(T0.plusDays(7), rowsFor("lab-note").get(0).getDueDate());
+            assertEquals(T0.plusDays(7), rowsFor("scan").get(0).getDueDate());
+        }
+
+        @Test
+        void openedByAnEventInALaterVisit_theyHaveNoDueDate_theOffsetIsAlreadyPast() {
+            record("registration", T0);
+            record("weight", T0.plusDays(1));
+            record("weight", T0.plusDays(30));
+            record("lab-order", T0.plusDays(30).plusHours(1));
+            record("report", T0.plusDays(30).plusHours(2));
+
+            assertNull(cyclesOf("lab", visitOf(1)).get(0).getDueDate());
+            assertNull(rowsFor("lab-note").get(0).getDueDate());
+            assertNull(rowsFor("scan").get(0).getDueDate(), "imaging's cycle is 0, but the visit around it is not");
+        }
+
+        private StepGroupInstance visitOf(int cycleIndex) {
+            return cyclesOf("visit", null).get(cycleIndex);
+        }
+    }
+
+    @Nested
     class StepFollowsAStepInAGroupAroundItsGroup {
 
         /** In the past: an event dated after the test's clock is recorded at the clock's time. */
@@ -862,9 +947,9 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             PlanDefinitionActionComponent pregnancy =
-                    namingEntryStep(repeatingBy(group(pd.addAction(), "pregnancy", "must"), "entry-step"), "registration");
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "pregnancy"), "entry-step"), "registration");
             step(pregnancy.addAction(), "registration", "must");
-            PlanDefinitionActionComponent visit = repeatingBy(group(pregnancy.addAction(), "visit", "must"), "calendar-day");
+            PlanDefinitionActionComponent visit = repeatingBy(group(pregnancy.addAction(), "visit"), "calendar-day");
             step(visit.addAction(), "weight", "must");
             after(step(visit.addAction(), "bp", "must"), "registration", 7);
             use(pd);
@@ -890,10 +975,10 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent group1 = group(pd.addAction(), "group-1", "must");
+            PlanDefinitionActionComponent group1 = group(pd.addAction(), "group-1");
             step(group1.addAction(), "step-1", "must");
             PlanDefinitionActionComponent group2 =
-                    namingEntryStep(repeatingBy(group(group1.addAction(), "group-2", "must"), "entry-step"), "g2-step-1");
+                    namingEntryStep(repeatingBy(group(group1.addAction(), "group-2"), "entry-step"), "g2-step-1");
             after(step(group2.addAction(), "g2-step-1", "must"), "step-1", 2);
             use(pd);
         }
@@ -934,9 +1019,9 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             PlanDefinitionActionComponent group1 =
-                    namingEntryStep(repeatingBy(group(pd.addAction(), "group-1", "must"), "entry-step"), "step-1");
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "group-1"), "entry-step"), "step-1");
             step(group1.addAction(), "intake", "must");
-            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2");
             step(group2.addAction(), "step-1", "must");
             use(pd);
         }
@@ -956,8 +1041,9 @@ class StepGroupLifecycleTest {
         void intakeFirst_opensCycle0_withoutStep1_andStep1StartsCycle1() {
             record("intake", T0);
 
-            assertEquals(1, cyclesOf("group-2", cyclesOf("group-1", null).get(0)).size(), "group 2 opens with group 1");
-            assertTrue(rowsFor("step-1").isEmpty(), "opening group 2 leaves group 1's entry step to its event");
+            assertTrue(cyclesOf("group-2", cyclesOf("group-1", null).get(0)).isEmpty(),
+                    "group 2 is optional, so it doesn't open with group 1");
+            assertTrue(rowsFor("step-1").isEmpty(), "group 1's entry step is left to its event");
 
             record("step-1", T0.plusMinutes(10));
 
@@ -972,9 +1058,9 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent group1 = namingEntryStep(repeatingBy(group(pd.addAction(), "group-1", "must"), "entry-step"), "intake");
+            PlanDefinitionActionComponent group1 = namingEntryStep(repeatingBy(group(pd.addAction(), "group-1"), "entry-step"), "intake");
             step(group1.addAction(), "intake", "must");
-            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2", "must");
+            PlanDefinitionActionComponent group2 = group(group1.addAction(), "group-2");
             step(group2.addAction(), "step-1", "must");
             use(pd);
         }
@@ -994,6 +1080,118 @@ class StepGroupLifecycleTest {
         }
     }
 
+    /**
+     * The Rwanda outpatient protocol written with step groups
+     * ({@code fhir/rwanda-outpatient-journey-step-groups.json}): an outpatient visit repeating by its check-in,
+     * holding vitals and a consultation group repeating by its consultation encounter.
+     */
+    @Nested
+    class RwandaOutpatientProtocol {
+
+        private static final OffsetDateTime DAY_1 = T0;
+        private static final OffsetDateTime DAY_15 = T0.plusDays(14);
+
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = fhirContext.newJsonParser().parseResource(PlanDefinition.class,
+                    getClass().getResourceAsStream("/fhir/rwanda-outpatient-journey-step-groups.json"));
+            // Every check the Protocol Service runs at load.
+            PlanDefinitionParser parser = new PlanDefinitionParser(fhirContext);
+            parser.validateActionIds(pd);
+            parser.validateActionTypes(pd);
+            parser.validateTriggers(pd);
+            parser.validateOptionalStepDeadlines(pd);
+            parser.validateRelationships(pd);
+            use(pd);
+        }
+
+        private StepGroupInstance visit(int cycleIndex) {
+            return cyclesOf("outpatient-visit", null).get(cycleIndex);
+        }
+
+        private StepGroupInstance consultation(StepGroupInstance visit, int cycleIndex) {
+            return cyclesOf("clinical-consultation", visit).get(cycleIndex);
+        }
+
+        @Test
+        void aVisit_expectsVitalsThenAConsultationThenADiagnosis_eachByItsOwnOffset() {
+            record("visit-encounter", DAY_1);
+            assertEquals(DAY_1.plusDays(1), rowsFor("vitals-recording").get(0).getDueDate());
+
+            record("vitals-recording", DAY_1.plusMinutes(20));
+            StepInstance awaitedConsultation = rowsFor("consultation").get(0);
+            assertEquals(StepStatus.NOT_STARTED, awaitedConsultation.getStepStatus(),
+                    "a visit with no consultation is reported: the first one is awaited after vitals");
+            assertEquals(DAY_1.plusMinutes(20).plusDays(1), awaitedConsultation.getDueDate());
+
+            record("consultation", DAY_1.plusHours(1));
+            assertEquals(1, cyclesOf("clinical-consultation", visit(0)).size(), "it completes the awaited one");
+            assertEquals(DAY_1.plusHours(1).plusDays(1), rowsFor("diagnosis").get(0).getDueDate(),
+                    "a diagnosis is expected after every consultation, with or without a lab test");
+        }
+
+        @Test
+        void labResultsDaysLater_stayInTheirVisitAndConsultation() {
+            record("visit-encounter", DAY_1);
+            record("vitals-recording", DAY_1.plusMinutes(20));
+            record("consultation", DAY_1.plusHours(1));
+            record("lab-order", DAY_1.plusHours(2));
+
+            record("lab-results", DAY_1.plusDays(3));
+            record("diagnosis", DAY_1.plusDays(3).plusHours(1));
+
+            assertEquals(1, cyclesOf("outpatient-visit", null).size(), "no new visit without a check-in");
+            assertEquals(consultation(visit(0), 0).getId(), groupInstanceIdOf(rowsFor("lab-results").get(0)));
+            assertEquals(1, rowsFor("diagnosis").size(), "the awaited diagnosis is completed, not added to");
+            assertEquals(StepStatus.COMPLETED, rowsFor("diagnosis").get(0).getStepStatus());
+        }
+
+        @Test
+        void aSecondConsultationInAVisit_isItsOwnCycle_withItsOwnDiagnosis() {
+            record("visit-encounter", DAY_1);
+            record("vitals-recording", DAY_1.plusMinutes(20));
+            record("consultation", DAY_1.plusHours(1));
+            record("diagnosis", DAY_1.plusHours(2));
+
+            record("consultation", DAY_1.plusHours(5));
+
+            assertEquals(2, cyclesOf("clinical-consultation", visit(0)).size());
+            StepInstance secondDiagnosis = rowsFor("diagnosis").get(1);
+            assertEquals(consultation(visit(0), 1).getId(), groupInstanceIdOf(secondDiagnosis));
+            assertEquals(DAY_1.plusHours(5).plusDays(1), secondDiagnosis.getDueDate());
+        }
+
+        @Test
+        void eachCheckIn_startsANewVisit_withItsOwnVitalsAndConsultation() {
+            record("visit-encounter", DAY_1);
+            record("vitals-recording", DAY_1.plusMinutes(20));
+            record("consultation", DAY_1.plusHours(1));
+            record("diagnosis", DAY_1.plusHours(2));
+
+            record("visit-encounter", DAY_15);
+            record("vitals-recording", DAY_15.plusMinutes(20));
+
+            assertEquals(2, cyclesOf("outpatient-visit", null).size());
+            assertEquals(DAY_15.plusDays(1), rowsFor("vitals-recording").get(1).getDueDate());
+            StepInstance awaitedConsultation = rowsFor("consultation").get(1);
+            assertEquals(consultation(visit(1), 0).getId(), groupInstanceIdOf(awaitedConsultation));
+            assertEquals(DAY_15.plusMinutes(20).plusDays(1), awaitedConsultation.getDueDate());
+        }
+
+        @Test
+        void vitalsBeforeTheCheckIn_joinTheLatestVisit() {
+            record("visit-encounter", DAY_1);
+            record("vitals-recording", DAY_1.plusMinutes(20));
+
+            record("vitals-recording", DAY_15);       // sent before that day's check-in
+            record("visit-encounter", DAY_15.plusMinutes(5));
+
+            assertEquals(visit(0).getId(), groupInstanceIdOf(rowsFor("vitals-recording").get(1)),
+                    "without its check-in first, an event can only join the latest visit");
+            assertEquals(2, cyclesOf("outpatient-visit", null).size());
+        }
+    }
+
     @Nested
     class RwandaJourney {
 
@@ -1007,10 +1205,10 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey", "must"), "calendar-day");
+            PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey"), "calendar-day");
             step(journey.addAction(), "check-in", "must");
             PlanDefinitionActionComponent consultation =
-                    namingEntryStep(repeatingBy(group(journey.addAction(), "consultation", "must"), "entry-step"), "history");
+                    namingEntryStep(repeatingBy(group(journey.addAction(), "consultation"), "entry-step"), "history");
             after(consultation, "check-in", 0);
             step(consultation.addAction(), "history", "must");
             after(step(consultation.addAction(), "examination", "must"), "history", 0);
@@ -1186,7 +1384,7 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey", "must"), "calendar-day");
+            PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey"), "calendar-day");
             step(journey.addAction(), "check-in", "must");
             after(step(journey.addAction(), "examination", "must"), "check-in", 0);
             after(step(journey.addAction(), "prescription", "must"), "examination", 0);
@@ -1238,11 +1436,11 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             step(pd.addAction(), "registration", "must");
-            PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey", "must"), "calendar-day");
+            PlanDefinitionActionComponent journey = repeatingBy(group(pd.addAction(), "journey"), "calendar-day");
             after(journey, "registration", 0);
             step(journey.addAction(), "check-in", "must");
             after(step(journey.addAction(), "consent", "must"), "registration", 0);
-            PlanDefinitionActionComponent triage = group(journey.addAction(), "triage", "must");
+            PlanDefinitionActionComponent triage = group(journey.addAction(), "triage");
             after(triage, "registration", 0);
             after(step(triage.addAction(), "vitals", "must"), "registration", 0);
             after(step(pd.addAction(), "discharge", "must"), "check-in", 0);
@@ -1321,7 +1519,7 @@ class StepGroupLifecycleTest {
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit");
             step(visit.addAction(), "examination", "must");
             after(step(visit.addAction(), "prescription", "must"), "examination", 0);
             use(pd);
@@ -1391,15 +1589,16 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
+    @Disabled("Mandatory groups come in a later phase (plan point 11). Re-enable when the load check on a group's requiredBehavior is lifted.")
     class ClinicVisit {
 
         /** A visit: intake, and a measurements group holding BP; nothing waits on anything. */
         @BeforeEach
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
-            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            PlanDefinitionActionComponent visit = mandatoryGroup(pd.addAction(), "visit");
             step(visit.addAction(), "intake", "must");
-            PlanDefinitionActionComponent measurements = group(visit.addAction(), "measurements", "must");
+            PlanDefinitionActionComponent measurements = mandatoryGroup(visit.addAction(), "measurements");
             step(measurements.addAction(), "bp", "must");
             use(pd);
         }
@@ -1416,6 +1615,7 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
+    @Disabled("Mandatory groups come in a later phase (plan point 11). Re-enable when the load check on a group's requiredBehavior is lifted.")
     class TwoPrerequisites {
 
         /** A review group due 10 days after the assessment starts, and 5 days after the labs end. */
@@ -1424,7 +1624,7 @@ class StepGroupLifecycleTest {
             PlanDefinition pd = new PlanDefinition();
             step(pd.addAction(), "assessment", "must");
             step(pd.addAction(), "labs", "must");
-            PlanDefinitionActionComponent review = group(pd.addAction(), "review", "must");
+            PlanDefinitionActionComponent review = mandatoryGroup(pd.addAction(), "review");
             afterStart(review, "assessment", 10);
             after(review, "labs", 5);
             step(review.addAction(), "summary", "must");
@@ -1452,7 +1652,7 @@ class StepGroupLifecycleTest {
         void protocol() {
             PlanDefinition pd = new PlanDefinition();
             step(pd.addAction(), "registration", "must");
-            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit", "must");
+            PlanDefinitionActionComponent visit = group(pd.addAction(), "visit");
             after(step(visit.addAction(), "bp", "must"), "registration", 7);
             step(visit.addAction(), "weight", "must");
             after(step(pd.addAction(), "treatment", "must"), "bp", 0);

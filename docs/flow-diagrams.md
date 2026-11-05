@@ -473,7 +473,7 @@ A `relatedAction` is written on the later step, and names the step it follows, w
 When any step completes, progressive instantiation (`ProgressiveInstantiationService.instantiateDependents()`) does two things:
 
 1. It looks up the steps that depend on the completed step and creates them. Their due dates are taken from the offset on the edge between them.
-2. It then opens the mandatory groups that follow the completed step.
+2. It then opens the mandatory groups that follow the completed step. For now there are none: every group is optional, and an optional group isn't opened by a step it follows (plan point 11).
 
 ```mermaid
 flowchart TD
@@ -500,7 +500,7 @@ flowchart TD
     SKIP3 --> NEXT
     SKIP4 --> NEXT
     NEXT --> LOOP
-    LOOP -->|"Done"| GROUPS["Open the mandatory groups that follow it<br/>(StepGroupService.openFollowingGroup)"]
+    LOOP -->|"Done"| GROUPS["Open the mandatory groups that follow it<br/>(StepGroupService.openFollowingGroup)<br/>none for now: every group is optional"]
     GROUPS --> END["Return"]
 ```
 
