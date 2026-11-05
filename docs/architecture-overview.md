@@ -1119,45 +1119,6 @@ Neither its parent opening nor a step it follows completing opens it. *Later pha
 - Neither the parent opening nor work opens one. A step or group that would go in it waits for that event.
 - So a Consultation that follows check-in does not open when check-in completes. Its history is not awaited, and not judged, until the Consultation starts.
 
-**A step in a group that follows a step outside the group:** A step that waits on nothing inside its group can still follow a step outside the group, for example `visit { bp, 7 days after registration }`. It then keeps its own offset, like a step outside any group (`StepGroupService.firstStepDueDate`):
-- **The step it follows is done:** in cycle 0, the step is due that long after it, here registration + 7 days. Its own offset wins over the group's due date. With several such steps, the latest one counts.
-- **The step it follows isn't done yet:** the step isn't created when the group opens. Progressive instantiation creates it when that step is done, with its own offset.
-- **In a later cycle,** the patient came back, so the offset would already be past. The step is created with no due date, like every step in a later cycle.
-
-A **nested group** that follows a step outside its parent gets its due date the same way, for example `visit [calendar-day] { lab, 7 days after registration { lab-order; lab-note } }`. Its first level mandatory members take its due date. An event for `lab-order` opens `lab`:
-- **in the first visit,** `lab` is due registration + 7 days, and so is `lab-note`;
-- **in a later visit,** `lab` has no due date, and nor does `lab-note`.
-
-*Later phase,* for a mandatory `lab`: it doesn't open with the visit while registration isn't done. It opens when registration is done (`openFollowingGroup`), due 7 days later, even in a later visit, because the offset is then still ahead.
-
-"A later cycle" means a later cycle of the step's own group **or of any group around it**, up to the group that also holds the step it follows (`StepGroupService.inALaterCycle`). Two examples:
-- `visit [calendar-day] { imaging { scan, 7 days after registration } }`: `imaging` is always cycle 0 inside its visit, but a later visit is a later cycle. So a later visit's `scan` has no due date.
-- `pregnancy [entry-step: registration] { registration; visit [calendar-day] { bp, 7 days after registration } }`: each pregnancy holds its own registration. So the first visit of the second pregnancy is due 7 days after the second registration. It is not a later cycle for it.
-
-The same holds in a `calendar-day` group. For example, in `registration; journey [calendar-day] { check-in; consent, 2 days after registration }`, the first visit's consent is due 2 days after registration. Each later visit creates consent again, with no due date. A step that should happen only once belongs outside the visit group.
-
-**An entry step the protocol expects:** There is one exception to the rule above: an entry step with a `relatedAction` to a step outside its group. The protocol then expects the entry step after that step.
-- When that step completes, progressive instantiation opens the group's cycle 0, if the group has none yet.
-- It creates the entry step `NOT_STARTED`, due by its own offset. So the entry step goes `OVERDUE`, then `MISSED`, if the patient never comes for it.
-- The first event for the entry step completes it, in cycle 0. Each later event for it starts the next cycle.
-- Only cycle 0 is created this way. Every later cycle already holds its entry step.
-- Backfill never opens an `entry-step` group.
-
-Opening a cycle never creates the entry step. Its own event creates it, or the work that expects it. So a cycle opened by another step's event, such as a BP before any history, has no entry step waiting in it.
-
-**`relatedAction` and groups:** A `relatedAction` can be on a group, on a step inside a group, or point at a group. What is supported:
-
-| What | Example | Loads? | What happens |
-|---|---|---|---|
-| A group follows a step. The `relatedAction` is on the group | `visit-2`, 6 weeks after `registration` | Yes | The group's cycle 0 is due when registration is done, plus 6 weeks, and its first level mandatory members take that due date. For now, registration completing doesn't open it: every group is optional. It opens on an event for one of its steps, or on work for one of its `must` steps. To have its steps expected after registration, put the `relatedAction` on them. A nested group opened in a later cycle of its parent has no due date. *Later phase:* a mandatory group that doesn't repeat by visit opens as soon as registration is done (`openFollowingGroup`) |
-| A step inside a group follows a step outside it | `visit { bp, 7 days after registration }` | Yes | The order works: order violations and backfill follow it. The step keeps its own offset, like a step outside any group: in cycle 0 it is due 7 days after registration is done. Until registration is done, it isn't created. In a later cycle it has no due date (above) |
-| A step follows a group. The `relatedAction` names the group | `referral`, after `visit-2` | No, refused at load | Groups are never recorded as done yet, so the step would never be created. This comes with group completion and closure in phase 4 (plan points 7 and 27). For now, relate the step to a step inside the group |
-| A group follows a group | `visit-3`, 4 weeks after `visit-2` | No, refused at load | The same reason, and the same phase. For now, relate `visit-3` to a step inside `visit-2` |
-
-Backfill also follows a group's own `relatedAction`. For example, `visit-2` follows `registration`, and a BP in visit 2 is recorded before registration. CCE then creates the missing registration, though the BP step names no earlier step of its own (`PlanDefinitionParser.computeMustPredecessorSteps`).
-
-The refusal is in `PlanDefinitionParser.rejectFollowersOfGroups`. Only `after-end` is supported here too, as everywhere.
-
 **How an event finds its group instance:** `StepGroupService.groupInstanceForEvent` makes two passes over the groups around the matched step.
 1. **Find the groups,** from the step's own group out to the top level (`Enrollment.groupsFromInnermostOut`).
 2. **Choose their instances, from the outermost in.** A group's instances are looked up inside the instance just chosen for its parent (`findLatestCycle`). And a trigger on an outer group gives the groups inside it fresh instances.
@@ -1208,6 +1169,70 @@ flowchart TD
     MORE -->|"Yes"| NEXT
     MORE -->|"No"| DONE["The instance the work goes to"]
 ```
+
+**Which row an event completes:** Both cases are in `StepInstanceService.stepInstanceForEvent`.
+- **A step in a group:** the group instance is chosen first (above), under the lock below. The event completes the step's open row in that instance, or adds a further completed row there. An earlier cycle's open row is never completed, whatever the event's clinical time.
+- **A step outside every group:** the event completes the open row whose due date is nearest its clinical time. With no open row, a new row is created.
+
+**Due dates:** A group instance's due date is the one the protocol plans:
+- its predecessor's completion plus the `relatedAction` offset; or
+- its parent instance's due date.
+
+A predecessor that shares a group with it is read in the same instance. So a second visit's Consultation counts from that visit's check-in.
+
+The due date is never the time of the event that happened to open the instance. That would make the group's later steps late as soon as they arrived.
+
+A cycle opened because the patient came back has no due date. That is cycle 1 onwards of a `cycle-boundary` group. Its predecessor's completion plus offset would already be past.
+
+Steps created with the instance take its due date, except a step that follows a step outside the group, which keeps its own offset (below). When no due date can be worked out, for example for a top-level group with no predecessor, they get none. They then get no `step_sla_state_transition` rows, show as pending, and are never judged.
+
+**A step in a group that follows a step outside the group:** A step that waits on nothing inside its group can still follow a step outside the group, for example `visit { bp, 7 days after registration }`. It then keeps its own offset, like a step outside any group (`StepGroupService.firstStepDueDate`):
+- **The step it follows is done:** in cycle 0, the step is due that long after it, here registration + 7 days. Its own offset wins over the group's due date. With several such steps, the latest one counts.
+- **The step it follows isn't done yet:** the step isn't created when the group opens. Progressive instantiation creates it when that step is done, with its own offset.
+- **In a later cycle,** the patient came back, so the offset would already be past. The step is created with no due date, like every step in a later cycle.
+
+A **nested group** that follows a step outside its parent gets its due date the same way, for example `visit [calendar-day] { lab, 7 days after registration { lab-order; lab-note } }`. Its first level mandatory members take its due date. An event for `lab-order` opens `lab`:
+- **in the first visit,** `lab` is due registration + 7 days, and so is `lab-note`;
+- **in a later visit,** `lab` has no due date, and nor does `lab-note`.
+
+*Later phase,* for a mandatory `lab`: it doesn't open with the visit while registration isn't done. It opens when registration is done (`openFollowingGroup`), due 7 days later, even in a later visit, because the offset is then still ahead.
+
+"A later cycle" means a later cycle of the step's own group **or of any group around it**, up to the group that also holds the step it follows (`StepGroupService.inALaterCycle`). Two examples:
+- `visit [calendar-day] { imaging { scan, 7 days after registration } }`: `imaging` is always cycle 0 inside its visit, but a later visit is a later cycle. So a later visit's `scan` has no due date.
+- `pregnancy [entry-step: registration] { registration; visit [calendar-day] { bp, 7 days after registration } }`: each pregnancy holds its own registration. So the first visit of the second pregnancy is due 7 days after the second registration. It is not a later cycle for it.
+
+The same holds in a `calendar-day` group. For example, in `registration; journey [calendar-day] { check-in; consent, 2 days after registration }`, the first visit's consent is due 2 days after registration. Each later visit creates consent again, with no due date. A step that should happen only once belongs outside the visit group.
+
+**An entry step the protocol expects:** There is one exception to the rule above: an entry step with a `relatedAction` to a step outside its group. The protocol then expects the entry step after that step.
+- When that step completes, progressive instantiation opens the group's cycle 0, if the group has none yet.
+- It creates the entry step `NOT_STARTED`, due by its own offset. So the entry step goes `OVERDUE`, then `MISSED`, if the patient never comes for it.
+- The first event for the entry step completes it, in cycle 0. Each later event for it starts the next cycle.
+- Only cycle 0 is created this way. Every later cycle already holds its entry step.
+- Backfill never opens an `entry-step` group.
+
+Opening a cycle never creates the entry step. Its own event creates it, or the work that expects it. So a cycle opened by another step's event, such as a BP before any history, has no entry step waiting in it.
+
+**`relatedAction` and groups:** A `relatedAction` can be on a group, on a step inside a group, or point at a group. What is supported:
+
+| What | Example | Loads? | What happens |
+|---|---|---|---|
+| A group follows a step. The `relatedAction` is on the group | `visit-2`, 6 weeks after `registration` | Yes | The group's cycle 0 is due when registration is done, plus 6 weeks, and its first level mandatory members take that due date. For now, registration completing doesn't open it: every group is optional. It opens on an event for one of its steps, or on work for one of its `must` steps. To have its steps expected after registration, put the `relatedAction` on them. A nested group opened in a later cycle of its parent has no due date. *Later phase:* a mandatory group that doesn't repeat by visit opens as soon as registration is done (`openFollowingGroup`) |
+| A step inside a group follows a step outside it | `visit { bp, 7 days after registration }` | Yes | The order works: order violations and backfill follow it. The step keeps its own offset, like a step outside any group: in cycle 0 it is due 7 days after registration is done. Until registration is done, it isn't created. In a later cycle it has no due date (above) |
+| A step follows a group. The `relatedAction` names the group | `referral`, after `visit-2` | No, refused at load | Groups are never recorded as done yet, so the step would never be created. This comes with group completion and closure in phase 4 (plan points 7 and 27). For now, relate the step to a step inside the group |
+| A group follows a group | `visit-3`, 4 weeks after `visit-2` | No, refused at load | The same reason, and the same phase. For now, relate `visit-3` to a step inside `visit-2` |
+
+Backfill also follows a group's own `relatedAction`. For example, `visit-2` follows `registration`, and a BP in visit 2 is recorded before registration. CCE then creates the missing registration, though the BP step names no earlier step of its own (`PlanDefinitionParser.computeMustPredecessorSteps`).
+
+The refusal is in `PlanDefinitionParser.rejectFollowersOfGroups`. Only `after-end` is supported here too, as everywhere.
+
+**Progression and checks:** What progressive instantiation or backfill adds to a group is deduplicated within the instance it goes to (above). So each visit gets its own.
+
+The order-violation check, backfill, the fan-in wait and a group's planned due date read a predecessor's rows by where the predecessor sits (`StepInstanceScope`):
+- **It shares a group with the completed step:** only inside that shared instance. So one cycle never sees another's rows, and a missing predecessor is backfilled into it.
+- **It is in a group that shares none:** in that group's latest cycle, inside its parent's latest. A top-level treatment after a visit's prescription checks this visit's prescription, not an earlier visit's.
+- **It is outside every group:** across the enrollment, since it happens once per enrollment.
+
+Backfill also follows what a step's enclosing groups wait on (`PlanDefinitionParser.computeMustPredecessorSteps` with the groups). For example, ANC visit 2 follows registration. A BP recorded in ANC visit 2 backfills registration when it has no row, though the BP step names no predecessor of its own. Order violations look only at a step's own predecessors.
 
 **Examples:** Each example is a test in `StepGroupLifecycleTest`, named in brackets.
 - Brackets after a group give its `cycle-boundary`, and for `entry-step` its entry step.
@@ -1320,31 +1345,6 @@ Other things this example shows:
 *8. A parent and its nested groups* (`ClinicVisit`, `AncVisit`).
 - For now every group is optional, so a nested group never opens with its parent. An event for one of its steps opens it, inside its parent's instance, and opens the parent first if needed. In `visit-2 { bp; weight; nutrition { diet } }`, a diet opens visit 2 and nutrition inside it (`anOptionalGroupOpensWhenOneOfItsStepsIsMatched_insideItsParent`).
 - *Later phase* (`ClinicVisit`, disabled until then): in `visit { intake; measurements { bp } }`, a mandatory measurements will open with the visit, creating bp.
-
-**Due dates:** A group instance's due date is the one the protocol plans:
-- its predecessor's completion plus the `relatedAction` offset; or
-- its parent instance's due date.
-
-A predecessor that shares a group with it is read in the same instance. So a second visit's Consultation counts from that visit's check-in.
-
-The due date is never the time of the event that happened to open the instance. That would make the group's later steps late as soon as they arrived.
-
-A cycle opened because the patient came back has no due date. That is cycle 1 onwards of a `cycle-boundary` group. Its predecessor's completion plus offset would already be past.
-
-Steps created with the instance take its due date, except a step that follows a step outside the group, which keeps its own offset (above). When no due date can be worked out, for example for a top-level group with no predecessor, they get none. They then get no `step_sla_state_transition` rows, show as pending, and are never judged.
-
-**Which row an event completes:** Both cases are in `StepInstanceService.stepInstanceForEvent`.
-- **A step in a group:** the group instance is chosen first (above), under the lock below. The event completes the step's open row in that instance, or adds a further completed row there. An earlier cycle's open row is never completed, whatever the event's clinical time.
-- **A step outside every group:** the event completes the open row whose due date is nearest its clinical time. With no open row, a new row is created.
-
-**Progression and checks:** What progressive instantiation or backfill adds to a group is deduplicated within the instance it goes to (above). So each visit gets its own.
-
-The order-violation check, backfill, the fan-in wait and a group's planned due date read a predecessor's rows by where the predecessor sits (`StepInstanceScope`):
-- **It shares a group with the completed step:** only inside that shared instance. So one cycle never sees another's rows, and a missing predecessor is backfilled into it.
-- **It is in a group that shares none:** in that group's latest cycle, inside its parent's latest. A top-level treatment after a visit's prescription checks this visit's prescription, not an earlier visit's.
-- **It is outside every group:** across the enrollment, since it happens once per enrollment.
-
-Backfill also follows what a step's enclosing groups wait on (`PlanDefinitionParser.computeMustPredecessorSteps` with the groups). For example, ANC visit 2 follows registration. A BP recorded in ANC visit 2 backfills registration when it has no row, though the BP step names no predecessor of its own. Order violations look only at a step's own predecessors.
 
 **Locking:** Every group decision runs under a `PESSIMISTIC_WRITE` lock on the enrollment's `protocol_instance` row (`ProtocolInstanceService.lockProtocolInstance`).
 - The lock is taken only when the protocol has groups.
