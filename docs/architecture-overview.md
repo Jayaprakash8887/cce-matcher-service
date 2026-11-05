@@ -989,28 +989,12 @@ An action typed `step` with `groupingBehavior: logical-group` is a **step group*
 
 The design is in [design-repeating-step-groups.md](design-repeating-step-groups.md). What is built when is in [implementation-plan-step-groups.md](implementation-plan-step-groups.md).
 
-**For now, every group is optional.** A group can't declare `requiredBehavior`: the Protocol Service refuses one at load (`PlanDefinitionParser.validateGroups`, plan point 11). Its steps keep their own `requiredBehavior`. Mandatory groups come in a later phase. The code for them stays, and this section marks what they will do as *later phase*. So, for now:
-- a group never opens with its parent;
-- a group never opens when a step it follows completes. Its own `relatedAction` only plans its due date;
-- a group with no `cycle-boundary` opens on an event for one of its steps, or on work for one of its `must` steps.
-
-To have a group's steps expected after an earlier step, put the `relatedAction` on those steps, not on the group. For example, `visit-2 { bp, 6 weeks after registration; weight, 6 weeks after registration }`. When registration completes, BP and weight are created, due 6 weeks later, and that work opens `visit-2`.
-
-**The three kinds of group at a glance.** A group's `cycle-boundary` decides how many instances it gets and what opens them. The parts below explain each row in detail.
-
-| | No `cycle-boundary` | `calendar-day` | `entry-step` |
-|---|---|---|---|
-| **Instances** | At most one inside each instance of its parent. At most one in total if top-level | One per clinical day with an event, inside each parent instance | One per episode. Each event for the entry step starts the next, unless the latest is still waiting for it |
-| **An event for one of its steps** | Opens it if it has none yet. Otherwise joins | Opens it on a new day. Otherwise joins | Opens cycle 0 if none. The entry step opens the next cycle. Otherwise joins |
-| **Its parent opening** | Never for now. *Later phase:* opens it, if it's `must`, waits on nothing inside the parent, and any step it follows outside is done | Never | Never |
-| **A step it follows completes** (its own `relatedAction`) | Never for now: the `relatedAction` only plans its due date. *Later phase:* opens it, if it's `must` | Never | Never |
-| **Work for one of its `must` steps** (progressive instantiation, backfill) | Opens it | Never: the work waits for an event | Only for its expected entry step, cycle 0 only (see **An entry step the protocol expects**) |
-| **When it opens, it creates** | Its first `must` members | Its first `must` members | Its first `must` members, except the entry step |
-| **Due date** | Planned: from its `relatedAction`, else its parent's. None inside a later cycle of a group around it, when it follows a step done before that cycle | First cycle: planned. Later cycles: none | First cycle: planned. Later cycles: none |
-
-- **Top-level groups** have no parent, so the "parent opening" row doesn't apply to them.
-- **Optional or mandatory** only matters for a group with no `cycle-boundary`, in the two rows marked *later phase*. A group that repeats by visit opens only on events, plus its expected entry step, either way.
-- **Nesting limits** are in the table under **Group instance creation triggers**: a `calendar-day` group can't be inside another one.
+> **For now, every group is optional.** A group can't declare `requiredBehavior`: the Protocol Service refuses one at load (`PlanDefinitionParser.validateGroups`, plan point 11). Its steps keep their own `requiredBehavior`. Mandatory groups come in a later phase. The code for them stays, and this section marks what they will do as *later phase*. So, for now:
+> - a group never opens with its parent;
+> - a group never opens when a step it follows completes. Its own `relatedAction` only plans its due date;
+> - a group with no `cycle-boundary` opens on an event for one of its steps, or on work for one of its `must` steps.
+>
+> To have a group's steps expected after an earlier step, put the `relatedAction` on those steps, not on the group. For example, `visit-2 { bp, 6 weeks after registration; weight, 6 weeks after registration }`. When registration completes, BP and weight are created, due 6 weeks later, and that work opens `visit-2`.
 
 **Group instance creation triggers.** Anything that needs a group instance joins the group's latest instance, unless a trigger opens a new one. The triggers are the same at every level of nesting, and are checked from the top-level group down (`StepGroupService.opensNewGroupInstance`).
 
@@ -1043,30 +1027,20 @@ A `calendar-day` group can't be inside another `calendar-day` group, at any dept
 | no `cycle-boundary` | `calendar-day` | Yes. For example `Group 1 { Group 2 { Group 3 [calendar-day] { step 1 } } }`: see example 1 under **Examples** below |
 | `calendar-day` or `entry-step` | `entry-step`, at any depth | Yes. For example `Group 1 [calendar-day] { Group 2 { Group 3 [entry-step: step 1] { step 1 } } }`: see example 2 under **Examples** below |
 
-**Group instance creation scenarios.** Two things can open a new instance: an event, or work that follows a completion.
-1. **An event** for one of the group's steps. `StepGroupService.groupInstanceForEvent` checks the triggers level by level, from the top-level group down.
-   1. *The event's own group.* The event can bring any of the three triggers. Otherwise it joins the latest instance.
-   2. *The groups around it.* For an event in a nested group, the triggers are checked for each enclosing group first. So a group around it can open a new instance too, such as a new visit on a new day.
-2. **Work that follows a completion.** There are two kinds:
-   1. *Progressive instantiation:* a step or group that follows the step that just completed.
-   2. *Backfill:* a mandatory step that the journey skipped.
+**Group instance creation rules.** When a group instance opens, by an event or by work (see **Group instance creation scenarios** below), it creates its **first level mandatory members** at once (`PlanDefinitionParser.membersCreatedOnOpen`, `StepGroupService.openGroupInstance`). This applies to every group, whatever its `cycle-boundary`. It is not progressive instantiation: nothing has to complete first. This is what "the parent opening" means elsewhere in this section and in the plan.
 
-   Work only ever brings trigger 1, because triggers 2 and 3 need an event. When the group already has an instance, work goes to the instance around the completed step, if there is one, so it stays in the visit it came from. Otherwise it goes to the latest instance (`StepGroupService.groupInstanceForWork`. `openFollowingGroup`, for a group that follows a step, opens nothing for now, since every group is optional).
-
-**What a group instance creates when it opens.** However it was opened, by an event or by work, a new group instance creates its **first members** at once (`PlanDefinitionParser.membersCreatedOnOpen`, `StepGroupService.openGroupInstance`). This applies to every group, whatever its `cycle-boundary`. It is not progressive instantiation: nothing has to complete first. This is what "the parent opening" means elsewhere in this section and in the plan.
-
-The first members are:
+The first level mandatory members are:
 - its mandatory steps that wait on nothing inside the group. Each is created `NOT_STARTED`;
-- *later phase:* its mandatory nested groups that wait on nothing inside the group, except groups that repeat by visit (`calendar-day`, `entry-step`). Each opens its first instance, which creates its own first members in the same way, one level down. For now every nested group is optional, so none opens with its parent.
+- *later phase:* its mandatory nested groups that wait on nothing inside the group, except groups that repeat by visit (`calendar-day`, `entry-step`). Each opens its first instance, which creates its own first level mandatory members in the same way, one level down. For now every nested group is optional, so none opens with its parent.
 
 Three words in that rule need care:
 - **Mandatory** means the member's own action has `requiredBehavior: "must"`. `could`, `must-unless-documented` and no `requiredBehavior` are all optional. For a nested group, it would be the group action itself, whatever its steps say. No group may declare it for now, so every group is optional.
 - **Wait on** means the member has a `relatedAction` naming another step or group.
-- **Inside the group** means anywhere in it, nested groups included. A member that waits only on a step **outside** the group still counts as a first member (see **A group's first step that follows a step outside the group** below).
+- **Inside the group** means anywhere in it, nested groups included. A member that waits only on a step **outside** the group still counts as a first level mandatory member (see **A group's first step that follows a step outside the group** below).
 
-So a group can have many first members. "First" means "waits on nothing inside", not "first in the list".
+So a group can have many first level mandatory members. "First level" means "waits on nothing inside the group", not "first in the list".
 
-Some first members are still not created when the instance opens:
+Some first level mandatory members are still not created when the instance opens:
 - the step whose event opened the instance. The event creates it, already done;
 - an entry step, of this group or of an `entry-step` group around it. Only its own event creates it, or the step it follows completing (see **An entry step the protocol expects** below);
 - a step that follows a step outside the group that isn't done yet. It is created when that step is done.
@@ -1104,7 +1078,7 @@ A `height` event on the patient's first day opens the visit. At that moment:
 | `bp` | Yes, if `registration` is done: due 7 days after it. If not, created when it is done | Waits only on a step outside the visit |
 | `height` | Created by its own event, already done | The step whose event opened the visit. Optional steps are never created on opening |
 | `lab` | No. Opened by an event for `lab-order` or `lab-result` | Every group is optional for now, so none opens with its parent |
-| `lab-order` | Not until `lab` opens. Then `NOT_STARTED`, unless its own event opened `lab` | A first member of `lab` |
+| `lab-order` | Not until `lab` opens. Then `NOT_STARTED`, unless its own event opened `lab` | A first level mandatory member of `lab` |
 | `lab-result` | No. Created when `lab-order` completes, due 3 days later | Waits on `lab-order`, inside `lab` |
 | `pharmacy` | No. Opened when `exam` completes: progressive instantiation creates `dispense`, and that work opens `pharmacy` | `dispense` is a `must` step that waits on `exam`, outside `pharmacy` |
 
@@ -1113,6 +1087,32 @@ On the patient's next day, a new visit instance opens and the same happens again
 *Example: where to put the `relatedAction`.* `pharmacy` is expected after `exam` because its step `dispense` names `exam`. Had the `relatedAction` been on `pharmacy` itself, it would only plan `pharmacy`'s due date. Nothing would open `pharmacy` until a `dispense` event came, so `dispense` would never be awaited. In the *later phase*, a mandatory `pharmacy` with that `relatedAction` will open when `exam` completes, and a mandatory `lab` will open with the visit.
 
 *Example: a mandatory step after an optional one.* If `history` above were `could`, nothing would expect `exam` until `history` happened. If `history` never happens, `exam` is never awaited. An `exam` recorded without `history` raises no order violation and no backfill, because both only look at mandatory predecessors. A step that must happen in every visit should not wait on an optional step. Make the earlier step `must`, or drop the `relatedAction`.
+
+**Variations of groups.** A group's `cycle-boundary` decides how many instances it gets and what opens them. The other parts of this section explain each row in detail.
+
+| | No `cycle-boundary` | `calendar-day` | `entry-step` |
+|---|---|---|---|
+| **Instances** | At most one inside each instance of its parent. At most one in total if top-level | One per clinical day with an event, inside each parent instance | One per episode. Each event for the entry step starts the next, unless the latest is still waiting for it |
+| **An event for one of its steps** | Opens it if it has none yet. Otherwise joins | Opens it on a new day. Otherwise joins | Opens cycle 0 if none. The entry step opens the next cycle. Otherwise joins |
+| **Its parent opening** | Never for now. *Later phase:* opens it, if it's `must`, waits on nothing inside the parent, and any step it follows outside is done | Never | Never |
+| **A step it follows completes** (its own `relatedAction`) | Never for now: the `relatedAction` only plans its due date. *Later phase:* opens it, if it's `must` | Never | Never |
+| **Work for one of its `must` steps** (progressive instantiation, backfill) | Opens it | Never: the work waits for an event | Only for its expected entry step, cycle 0 only (see **An entry step the protocol expects**) |
+| **When it opens, it creates** | Its first level mandatory members | Its first level mandatory members | Its first level mandatory members, except the entry step |
+| **Due date** | Planned: from its `relatedAction`, else its parent's. None inside a later cycle of a group around it, when it follows a step done before that cycle | First cycle: planned. Later cycles: none | First cycle: planned. Later cycles: none |
+
+- **Top-level groups** have no parent, so the "parent opening" row doesn't apply to them.
+- **Optional or mandatory** only matters for a group with no `cycle-boundary`, in the two rows marked *later phase*. A group that repeats by visit opens only on events, plus its expected entry step, either way.
+- **Nesting limits** are in the table under **Group instance creation triggers** above: a `calendar-day` group can't be inside another one.
+
+**Group instance creation scenarios.** Two things can open a new instance: an event, or work that follows a completion.
+1. **An event** for one of the group's steps. `StepGroupService.groupInstanceForEvent` checks the triggers level by level, from the top-level group down.
+   1. *The event's own group.* The event can bring any of the three triggers. Otherwise it joins the latest instance.
+   2. *The groups around it.* For an event in a nested group, the triggers are checked for each enclosing group first. So a group around it can open a new instance too, such as a new visit on a new day.
+2. **Work that follows a completion.** There are two kinds:
+   1. *Progressive instantiation:* a step or group that follows the step that just completed.
+   2. *Backfill:* a mandatory step that the journey skipped.
+
+   Work only ever brings trigger 1, because triggers 2 and 3 need an event. When the group already has an instance, work goes to the instance around the completed step, if there is one, so it stays in the visit it came from. Otherwise it goes to the latest instance (`StepGroupService.groupInstanceForWork`. `openFollowingGroup`, for a group that follows a step, opens nothing for now, since every group is optional).
 
 **Groups that repeat by visit.** Only an event opens a `calendar-day` or `entry-step` group, because their cycles start when the patient comes.
 - A `calendar-day` cycle starts on the day of an event.
