@@ -1174,7 +1174,9 @@ flowchart TD
 - **A step in a group:** the group instance is chosen first (above), under the lock below. The event completes the step's open row in that instance, or adds a further completed row there. An earlier cycle's open row is never completed, whatever the event's clinical time.
 - **A step outside every group:** the event completes the open row whose due date is nearest its clinical time. With no open row, a new row is created.
 
-**Due dates:** A group instance's due date is the one the protocol plans:
+**Due dates of group instances:** Nothing judges a group's own deadline yet (phase 4). A group instance's due date matters because the steps created with it take that date, and those steps are judged.
+
+A group instance's due date is the one the protocol plans:
 - its predecessor's completion plus the `relatedAction` offset; or
 - its parent instance's due date.
 
