@@ -582,7 +582,8 @@ class StepGroupLifecycleTest {
     @Nested
     class VisitsInAnEpisode {
 
-        private static final OffsetDateTime NEXT_PREGNANCY = T0.plusDays(300);
+        /** In the past: an event dated after the test's clock is recorded at the clock's time. */
+        private static final OffsetDateTime NEXT_PREGNANCY = T0.plusDays(200);
 
         /** A pregnancy repeating by entry step, registration; inside it, an ANC visit repeating by calendar day. */
         @BeforeEach
@@ -737,6 +738,148 @@ class StepGroupLifecycleTest {
             assertEquals(2, bps.size());
             assertEquals(T0.plusDays(7), bps.get(0).getDueDate(), "the first visit: registration + 7 days");
             assertNull(bps.get(1).getDueDate(), "a later visit has no due date");
+        }
+    }
+
+    @Nested
+    class OptionalGroupOpenedByWork {
+
+        /**
+         * Registration; an optional lab, whose lab-order (must) follows registration by 3 days and whose
+         * lab-note (must) follows nothing; an optional review that itself follows registration; and a
+         * follow-up (must) after lab-order.
+         */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            step(pd.addAction(), "registration", "must");
+            PlanDefinitionActionComponent lab = group(pd.addAction(), "lab", "could");
+            after(step(lab.addAction(), "lab-order", "must"), "registration", 3);
+            step(lab.addAction(), "lab-note", "must");
+            PlanDefinitionActionComponent review = group(pd.addAction(), "review", "could");
+            after(review, "registration", 0);
+            step(review.addAction(), "review-note", "must");
+            after(step(pd.addAction(), "follow-up", "must"), "lab-order", 0);
+            use(pd);
+        }
+
+        @Test
+        void aMandatoryStepThatFollowsAStepOutside_opensItsOptionalGroup_whichCreatesItsFirstMembers() {
+            record("registration", T0);
+
+            assertEquals(1, cyclesOf("lab", null).size(), "work for a must step opens the optional group");
+            assertEquals(T0.plusDays(3), rowsFor("lab-order").get(0).getDueDate());
+            assertEquals(1, rowsFor("lab-note").size(), "the group then creates its first must members");
+            assertTrue(cyclesOf("review", null).isEmpty(),
+                    "an optional group that itself follows a step is still not opened by it");
+        }
+
+        @Test
+        void backfillingAMandatoryStepInAnOptionalGroup_opensTheGroup() {
+            record("follow-up", T0);
+
+            assertEquals(1, cyclesOf("lab", null).size());
+            assertEquals(StepStatus.NOT_STARTED, rowsFor("lab-order").get(0).getStepStatus());
+        }
+    }
+
+    @Nested
+    class NestedGroupFollowsAStepOutsideItsParent {
+
+        /**
+         * Registration; a visit repeating by calendar day, holding weight, a lab group 7 days after
+         * registration (with lab-order), and an imaging group whose scan is 7 days after registration.
+         */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            step(pd.addAction(), "registration", "must");
+            PlanDefinitionActionComponent visit = repeatingBy(group(pd.addAction(), "visit", "must"), "calendar-day");
+            step(visit.addAction(), "weight", "must");
+            PlanDefinitionActionComponent lab = group(visit.addAction(), "lab", "must");
+            after(lab, "registration", 7);
+            step(lab.addAction(), "lab-order", "must");
+            PlanDefinitionActionComponent imaging = group(visit.addAction(), "imaging", "must");
+            after(step(imaging.addAction(), "scan", "must"), "registration", 7);
+            use(pd);
+        }
+
+        @Test
+        void inTheFirstVisit_theGroupAndTheStepInsideANestedGroup_areDueByTheirOwnOffset() {
+            record("registration", T0);
+            record("weight", T0.plusDays(1));
+
+            StepGroupInstance visit = cyclesOf("visit", null).get(0);
+            assertEquals(T0.plusDays(7), cyclesOf("lab", visit).get(0).getDueDate());
+            assertEquals(T0.plusDays(7), rowsFor("lab-order").get(0).getDueDate());
+            assertEquals(T0.plusDays(7), rowsFor("scan").get(0).getDueDate());
+        }
+
+        @Test
+        void inALaterVisit_theyHaveNoDueDate_theOffsetIsAlreadyPast() {
+            record("registration", T0);
+            record("weight", T0.plusDays(1));
+            record("weight", T0.plusDays(30));
+
+            StepGroupInstance secondVisit = cyclesOf("visit", null).get(1);
+            assertNull(cyclesOf("lab", secondVisit).get(0).getDueDate());
+            assertNull(rowsFor("lab-order").get(1).getDueDate());
+            assertNull(rowsFor("scan").get(1).getDueDate(), "lab's cycle is 0, but the visit around it is not");
+        }
+
+        @Test
+        void whileTheStepItFollowsIsNotDone_theGroupWaits_andOpensWithItsOwnOffsetWhenItIs() {
+            record("weight", T0);
+            StepGroupInstance visit = cyclesOf("visit", null).get(0);
+            assertTrue(cyclesOf("lab", visit).isEmpty(), "registration isn't done: lab waits, as a step would");
+            assertTrue(rowsFor("lab-order").isEmpty());
+
+            record("registration", T0.plusHours(1));
+
+            assertEquals(T0.plusHours(1).plusDays(7), cyclesOf("lab", visit).get(0).getDueDate());
+            assertEquals(T0.plusHours(1).plusDays(7), rowsFor("lab-order").get(0).getDueDate());
+        }
+
+        @Test
+        void whenTheStepItFollowsIsDoneDuringALaterVisit_itsOffsetIsStillAhead() {
+            record("weight", T0);
+            record("weight", T0.plusDays(30));
+            record("registration", T0.plusDays(30).plusHours(1));
+
+            StepGroupInstance secondVisit = cyclesOf("visit", null).get(1);
+            assertEquals(T0.plusDays(37).plusHours(1), cyclesOf("lab", secondVisit).get(0).getDueDate());
+        }
+    }
+
+    @Nested
+    class StepFollowsAStepInAGroupAroundItsGroup {
+
+        /** In the past: an event dated after the test's clock is recorded at the clock's time. */
+        private static final OffsetDateTime NEXT_PREGNANCY = T0.plusDays(200);
+
+        /** A pregnancy repeating by entry step, registration; inside it, a visit per day with weight and BP. */
+        @BeforeEach
+        void protocol() {
+            PlanDefinition pd = new PlanDefinition();
+            PlanDefinitionActionComponent pregnancy =
+                    namingEntryStep(repeatingBy(group(pd.addAction(), "pregnancy", "must"), "entry-step"), "registration");
+            step(pregnancy.addAction(), "registration", "must");
+            PlanDefinitionActionComponent visit = repeatingBy(group(pregnancy.addAction(), "visit", "must"), "calendar-day");
+            step(visit.addAction(), "weight", "must");
+            after(step(visit.addAction(), "bp", "must"), "registration", 7);
+            use(pd);
+        }
+
+        @Test
+        void eachPregnancysFirstVisit_countsFromItsOwnRegistration() {
+            record("registration", T0);
+            record("weight", T0.plusDays(1));
+            record("registration", NEXT_PREGNANCY);
+            record("weight", NEXT_PREGNANCY.plusDays(1));
+
+            assertEquals(T0.plusDays(7), rowsFor("bp").get(0).getDueDate());
+            assertEquals(NEXT_PREGNANCY.plusDays(7), rowsFor("bp").get(1).getDueDate(),
+                    "a new pregnancy brings its own registration: not a later cycle for it");
         }
     }
 

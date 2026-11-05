@@ -17,6 +17,8 @@ import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Step group instances: which instance of a group an event or a piece of work goes to, and opening one
@@ -298,9 +300,10 @@ public class StepGroupService {
 
     /**
      * Open the first instance of the group {@code groupMetadata} describes, which follows
-     * {@code completedStepInstance}, now that it has completed. Optional groups are never opened in
-     * advance, only when one of their steps is matched, and neither is a group that repeats by visit,
-     * whose cycles start when the patient comes (see {@link #onlyAnEventOpens}). A group with other
+     * {@code completedStepInstance}, now that it has completed. An optional group isn't opened by a step it
+     * follows: it opens for an event for one of its steps, or for work for one of its {@code must} steps (see
+     * {@link #groupInstanceForWork}). Nor is a group that repeats by visit, whose cycles start when the
+     * patient comes (see {@link #onlyAnEventOpens}). A group with other
      * prerequisites still in flight waits for them; each of their completions runs this again.
      */
     public void openFollowingGroup(Enrollment enrollment, StepInstance completedStepInstance,
@@ -323,15 +326,17 @@ public class StepGroupService {
         if (latestGroupInstance(enrollment, groupMetadata.id(), parentGroupInstance).isPresent()) {
             return; // already open
         }
-        OffsetDateTime dueDate = plannedDueDate(enrollment, groupMetadata, parentGroupInstance);
-        if (dueDate == null) {
+        PlannedDueDate plannedDueDate = plannedDueDate(enrollment, groupMetadata, parentGroupInstance);
+        if (plannedDueDate.waits()) {
             // Its due date counts from its last prerequisite to finish, and another is still in flight;
             // that one's completion runs this again.
             log.debug("Deferring group {} — another prerequisite is still in flight (instanceId={})",
                     groupMetadata.id(), enrollment.protocolInstance().getId());
             return;
         }
-        openGroupInstance(enrollment, groupMetadata, parentGroupInstance, FIRST_CYCLE, dueDate,
+        // The step it follows has just been done, so its offset is still ahead, even in a later cycle of the
+        // parent: unlike opening with the parent, the planned due date always stands here.
+        openGroupInstance(enrollment, groupMetadata, parentGroupInstance, FIRST_CYCLE, plannedDueDate.dueDate(),
                 completedStepInstance.getCompletedAt(), null);
     }
 
@@ -350,9 +355,14 @@ public class StepGroupService {
                                                     Optional<StepGroupInstance> latestGroupInstance,
                                                     OffsetDateTime openedAt, String matchedStepId) {
         if (latestGroupInstance.isEmpty()) {
-            // The first instance: due when the protocol plans it.
+            // The first instance: due when the protocol plans it. Inside a later cycle of a group around it, a
+            // step it follows was done before that cycle, so its offset is already past: it has no due date,
+            // like a first step there (see firstStepDueDate).
+            OffsetDateTime dueDate = followsAStepFromAnEarlierCycle(enrollment, groupMetadata, parentGroupInstance)
+                    ? null
+                    : plannedDueDate(enrollment, groupMetadata, parentGroupInstance).dueDate();
             return openGroupInstance(enrollment, groupMetadata, parentGroupInstance, FIRST_CYCLE,
-                    plannedDueDate(enrollment, groupMetadata, parentGroupInstance), openedAt, matchedStepId);
+                    dueDate, openedAt, matchedStepId);
         }
         // A later cycle: the patient came back, past any date the protocol could plan, so it has none.
         return openGroupInstance(enrollment, groupMetadata, parentGroupInstance,
@@ -403,10 +413,14 @@ public class StepGroupService {
         }
         for (PlanDefinitionParser.GroupMetadata memberGroupMetadata : membersCreatedOnOpen.groups()) {
             // A group that repeats by visit waits for an event of its own: its cycles start when the patient comes.
-            if (!onlyAnEventOpens(memberGroupMetadata, null)) {
-                openNextGroupInstance(enrollment, memberGroupMetadata, groupInstance, Optional.empty(), openedAt,
-                        matchedStepId);
+            if (onlyAnEventOpens(memberGroupMetadata, null)) {
+                continue;
             }
+            if (followsAStepNotDoneYet(enrollment, memberGroupMetadata, groupInstance)) {
+                continue; // like a first step, it waits: openFollowingGroup opens it when that step is done
+            }
+            openNextGroupInstance(enrollment, memberGroupMetadata, groupInstance, Optional.empty(), openedAt,
+                    matchedStepId);
         }
         return groupInstance;
     }
@@ -439,13 +453,13 @@ public class StepGroupService {
      * that happened to open it, which would make a group judged late as soon as its second step arrived.
      *
      * <p>From the group's prerequisites when it has any: the latest of their finish times plus each
-     * edge's offset. A prerequisite still in flight means the date can't be known yet, so the answer is
-     * null; one with no step instance at all is ignored, as it is for steps. A prerequisite that shares a
+     * edge's offset. A prerequisite still in flight means the date can't be known yet, so the answer
+     * {@link PlannedDueDate#waits waits}; one with no step instance at all is ignored, as it is for steps. A prerequisite that shares a
      * group with this one is read inside {@code parentGroupInstance}, so a later visit's group counts from
      * that visit's check-in, not an earlier visit's. A group with no prerequisites takes its parent
      * instance's due date, and a top-level one has none.
      */
-    private OffsetDateTime plannedDueDate(Enrollment enrollment, PlanDefinitionParser.GroupMetadata groupMetadata,
+    private PlannedDueDate plannedDueDate(Enrollment enrollment, PlanDefinitionParser.GroupMetadata groupMetadata,
                                           StepGroupInstance parentGroupInstance) {
         PlanDefinitionParser.DependencyGraph graph = enrollment.protocol().dependencyGraph();
         OffsetDateTime latestDueDate = null;
@@ -461,7 +475,7 @@ public class StepGroupService {
             }
             PrerequisiteProgress progress = prerequisiteProgress(enrollment, prerequisiteId, parentGroupInstance);
             if (progress.inFlight()) {
-                return null; // can't be known until that prerequisite finishes
+                return PlannedDueDate.WAITS; // can't be known until that prerequisite finishes
             }
             if (progress.finishedAt() == null) {
                 continue; // never recorded: ignored, as it is for steps
@@ -478,10 +492,71 @@ public class StepGroupService {
             anyFinished = true;
         }
         if (anyFinished) {
-            return latestDueDate;
+            return new PlannedDueDate(false, latestDueDate);
         }
         // No prerequisite has finished: the parent instance's due date, and none for a top-level group.
-        return parentGroupInstance != null ? parentGroupInstance.getDueDate() : null;
+        return new PlannedDueDate(false, parentGroupInstance != null ? parentGroupInstance.getDueDate() : null);
+    }
+
+    /**
+     * A group instance's planned due date, or that it {@code waits} for a prerequisite still in flight.
+     *
+     * @param dueDate the due date; null for none
+     */
+    private record PlannedDueDate(boolean waits, OffsetDateTime dueDate) {
+        static final PlannedDueDate WAITS = new PlannedDueDate(true, null);
+    }
+
+    /**
+     * Whether a nested group, about to open with its parent, follows a step that isn't done yet. Such a step
+     * is outside the parent: a first member follows nothing inside it. The group then waits, as a first step
+     * does (see {@link #firstStepDueDate}), and {@link #openFollowingGroup} opens it when that step is done.
+     */
+    private boolean followsAStepNotDoneYet(Enrollment enrollment, PlanDefinitionParser.GroupMetadata groupMetadata,
+                                           StepGroupInstance parentGroupInstance) {
+        return enrollment.protocol().dependencyGraph().predecessorsOf(groupMetadata.id()).stream()
+                .anyMatch(prerequisiteId ->
+                        prerequisiteProgress(enrollment, prerequisiteId, parentGroupInstance).finishedAt() == null);
+    }
+
+    /**
+     * Whether a group opening its first instance inside {@code parentGroupInstance} follows a step done in an
+     * earlier cycle (see {@link #inALaterCycle}).
+     */
+    private boolean followsAStepFromAnEarlierCycle(Enrollment enrollment,
+                                                   PlanDefinitionParser.GroupMetadata groupMetadata,
+                                                   StepGroupInstance parentGroupInstance) {
+        return parentGroupInstance != null
+                && enrollment.protocol().dependencyGraph().predecessorsOf(groupMetadata.id()).stream()
+                        .anyMatch(prerequisiteId -> inALaterCycle(enrollment, parentGroupInstance, prerequisiteId));
+    }
+
+    /**
+     * Whether {@code groupInstance} is in a later cycle than the one the step {@code prerequisiteId} was done
+     * for. Walk out from {@code groupInstance} to the first group that also holds that step. If any instance
+     * on the way is not cycle 0, the patient came back after the step was done, so the step's completion plus
+     * an offset is already past. Beyond that group, a new cycle brings its own step: the next pregnancy has
+     * its own registration.
+     */
+    private static boolean inALaterCycle(Enrollment enrollment, StepGroupInstance groupInstance,
+                                         String prerequisiteId) {
+        PlanDefinitionParser.StepMetadata prerequisiteStepMetadata = enrollment.step(prerequisiteId);
+        Set<String> groupsHoldingThePrerequisite = prerequisiteStepMetadata == null
+                || prerequisiteStepMetadata.groupId() == null
+                ? Set.of()
+                : enrollment.groupsFromInnermostOut(prerequisiteStepMetadata.groupId()).stream()
+                        .map(PlanDefinitionParser.GroupMetadata::id)
+                        .collect(Collectors.toSet());
+        for (StepGroupInstance instance = groupInstance; instance != null;
+             instance = instance.getParentGroupInstance()) {
+            if (groupsHoldingThePrerequisite.contains(instance.getGroupActionId())) {
+                return false;
+            }
+            if (instance.getCycleIndex() != FIRST_CYCLE) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -490,8 +565,9 @@ public class StepGroupService {
      *   <li>A step that follows nothing takes the instance's due date.</li>
      *   <li>A step that follows a step outside the group keeps its own offset. In cycle 0 it is due when the
      *       last of the steps it follows was done, plus its offset.</li>
-     *   <li>In a later cycle it has no due date, as the cycle has none: the patient came back, and the offset
-     *       would already be past.</li>
+     *   <li>In a later cycle it has no due date: the patient came back, and the offset would already be past.
+     *       That is a later cycle of its own group, or of a group around it that doesn't also hold the step it
+     *       follows (see {@link #inALaterCycle}).</li>
      *   <li>While a step it follows isn't done, it {@link FirstStepDueDate#waits waits}: it isn't created now.
      *       Progressive instantiation creates it when that step is done, with its own offset, as for a step
      *       outside any group.</li>
@@ -502,6 +578,7 @@ public class StepGroupService {
                                               StepGroupInstance groupInstance) {
         PlanDefinitionParser.DependencyGraph graph = enrollment.protocol().dependencyGraph();
         OffsetDateTime latestDueDate = null;
+        boolean inALaterCycle = false;
         for (String prerequisiteId : graph.predecessorsOf(stepMetadata.id())) {
             PlanDefinitionParser.RelatedStepInfo edge = graph.successorsOf(prerequisiteId).stream()
                     .filter(stepDependency -> stepDependency.step().id().equals(stepMetadata.id()))
@@ -522,11 +599,12 @@ public class StepGroupService {
             if (latestDueDate == null || dueDate.isAfter(latestDueDate)) {
                 latestDueDate = dueDate;
             }
+            inALaterCycle |= inALaterCycle(enrollment, groupInstance, prerequisiteId);
         }
         if (latestDueDate == null) {
             return new FirstStepDueDate(false, groupInstance.getDueDate()); // follows nothing
         }
-        return new FirstStepDueDate(false, groupInstance.getCycleIndex() == FIRST_CYCLE ? latestDueDate : null);
+        return new FirstStepDueDate(false, inALaterCycle ? null : latestDueDate);
     }
 
     /**

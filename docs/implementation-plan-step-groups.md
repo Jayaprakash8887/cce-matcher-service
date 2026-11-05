@@ -22,7 +22,7 @@ Phases 1 and 2 are all required before production. So are the data-pipeline, ins
 |---|---|---|
 | A1 | (a) Same verdict | A group with a deadline goes `OVERDUE` / `MISSED` whether the patient came and left work undone or never came. The group deviation's metadata lists the member steps that weren't completed. |
 | A2 | (b) Verdict only | Reports show the group's `sla_status`. The matcher still records `completed_at` when late work completes a closed group; reports don't show it. |
-| A3 | (b) Optional groups allowed | An optional group is never opened in advance. Once one of its steps is matched, its `must` steps become mandatory within it and are created. It never counts towards its parent's completion, started or not (point 11). It can't carry `tolerance-days`. |
+| A3 | (b) Optional groups allowed | An optional group doesn't open with its parent, or when a step it follows completes. It opens when one of its steps is matched, or when work creates one of its `must` steps (point 11). Once it is open, its `must` steps become mandatory within it and are created. It never counts towards its parent's completion, started or not (point 11). It can't carry `tolerance-days`. |
 | A4 | (b) Approximate | ANC protocols set visit due dates as offsets from a registration step. No code change. |
 | B1 | (b) Inner repeats allowed | An inner group may repeat within one instance of its outer group. Its cycles are numbered within that instance. |
 | B2 | (b) Calendar day | For a visit-driven group, an event opens a new cycle if its clinical day is later than the latest cycle's. The clinical day is taken in the deployment's time zone (point 4). Any other event goes to the latest cycle (F1, point 6). |
@@ -177,7 +177,13 @@ C1 says the group's deadline wins over a step's. Say ANC visit 2 has a deadline 
 
 **11. Optional groups and completion.** *(A3; blocks phases 1 and 4)*
 *Decided:*
-- an optional group is never opened in advance. It is opened only when one of its steps is matched, as optional steps are today (phase 1);
+- an optional group doesn't open on its own account. Its parent opening doesn't open it, and neither does a step that the group itself follows (`openFollowingGroup`). It opens in two ways:
+  - an event for one of its steps, as optional steps are today (phase 1);
+  - work for one of its `must` steps (`groupInstanceForWork`). That is progressive instantiation, when the step follows a step outside the group that has completed, or backfill, when the step is a skipped mandatory predecessor. The step is mandatory, so it is expected even though its group is optional. The group then creates its first members, like any group.
+
+  Example: an optional `lab` group, whose `lab-order` (must) follows registration by 3 days. When registration completes, `lab` opens and `lab-order` is due 3 days later. An optional `review` group that itself follows registration does not open.
+
+  The first decision was that an optional group is never opened in advance. On 2026-11-05 it was changed to let work for a `must` step open it, which the code already did (`StepGroupLifecycleTest.OptionalGroupOpenedByWork`);
 - it never counts towards its parent's completion or closure, whether it has started or not (phase 4). Its own completion is tracked on its own. Example: a "Nutrition counselling" group inside ANC visit 2 starts, but its diet assessment isn't done. Visit 2 is still complete once its own mandatory steps are.
 
 **12. Which row an event completes.** *(B6 + F1; blocks phase 1)*
@@ -308,7 +314,9 @@ A step created when its group opens takes the group's due date (point 8). That a
 - a step that follows nothing takes the group's due date. With none, it stays unjudged and shows as pending, until E5 fills in a due date (phase 4), if it ever does. Every reader of `step_instance.due_date` must allow null (after phase 2);
 - a step that follows a step outside the group keeps its own offset, like a step in no group. In cycle 0 it is due when the step it follows is done, plus its offset; with several, the latest counts. Its own offset wins over the group's due date;
 - while the step it follows isn't done, it isn't created when the group opens. Progressive instantiation creates it when that step is done;
-- in a later cycle it has no due date, as every step in a later cycle: the offset would already be past.
+- in a later cycle it has no due date, as every step in a later cycle: the offset would already be past;
+- "A later cycle" is a later cycle of the step's own group or of any group around it, up to the group that also holds the step it follows. Example: in `visit [calendar-day] { imaging { scan, 7 days after registration } }`, `imaging` is cycle 0 in every visit, but a later visit is still a later cycle, so its `scan` has no due date. In `pregnancy [entry-step: registration] { registration; visit [calendar-day] { bp, 7 days after registration } }`, each pregnancy holds its own registration, so the next pregnancy's first visit is not a later cycle for `bp`;
+- a nested group that follows a step outside its parent follows the same rule as a step. It doesn't open with its parent while that step isn't done. It opens when that step is done, due by its own offset, even in a later cycle of its parent, because the offset is then still ahead. When it opens with a parent in a later cycle, it has no due date, and nor do its first steps. Example: `visit [calendar-day] { lab, 7 days after registration { lab-order } }`. Before this, `lab` opened with every visit, and in every visit it took registration + 7 days, so a later visit's `lab-order` was overdue as soon as it was created (decided 2026-11-05).
 
 **30. A predecessor in a repeating group, seen from outside it.** *(B1 + B2 + F1; blocks phase 2)*
 Point 18 reads a predecessor inside the instance it shares with the completed step, and any other predecessor across the enrollment. Once a group repeats, "across the enrollment" sees every cycle. Say a top-level treatment follows the journey's prescription. On 3 Mar the prescription isn't recorded, and its row is still `NOT_STARTED`. On 17 Mar the prescription and then the treatment are recorded in order. But the 3 Mar row is still outstanding, so the treatment raises an `ORDER_VIOLATION`. The other way round, a prescription missing from the 17 Mar visit isn't backfilled, because the 3 Mar visit has one.
