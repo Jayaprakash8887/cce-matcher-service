@@ -989,6 +989,22 @@ An action typed `step` with `groupingBehavior: logical-group` is a **step group*
 
 The design is in [design-repeating-step-groups.md](design-repeating-step-groups.md). What is built when is in [implementation-plan-step-groups.md](implementation-plan-step-groups.md).
 
+**The three kinds of group at a glance.** A group's `cycle-boundary` decides how many instances it gets and what opens them. The parts below explain each row in detail.
+
+| | No `cycle-boundary` | `calendar-day` | `entry-step` |
+|---|---|---|---|
+| **Instances** | One inside each instance of its parent. One in total if top-level | One per clinical day with an event, inside each parent instance | One per episode. Each event for the entry step starts the next, unless the latest is still waiting for it |
+| **An event for one of its steps** | Opens it if it has none yet. Otherwise joins | Opens it on a new day. Otherwise joins | Opens cycle 0 if none. The entry step opens the next cycle. Otherwise joins |
+| **Its parent opening** | Opens it, if it's `must`, waits on nothing inside the parent, and any step it follows outside is done | Never | Never |
+| **A step it follows completes** (its own `relatedAction`) | Opens it, if it's `must` | Never | Never |
+| **Work for one of its `must` steps** (progressive instantiation, backfill) | Opens it, even if it's optional | Never: the work waits for an event | Only for its expected entry step, cycle 0 only (see **An entry step the protocol expects**) |
+| **When it opens, it creates** | Its first `must` members | Its first `must` members | Its first `must` members, except the entry step |
+| **Due date** | Planned: from its `relatedAction`, else its parent's. None inside a later cycle of a group around it, when it follows a step done before that cycle | First cycle: planned. Later cycles: none | First cycle: planned. Later cycles: none |
+
+- **Top-level groups** have no parent, so the "parent opening" row doesn't apply to them.
+- **Optional or mandatory** only matters for a group with no `cycle-boundary`, in two rows: an optional one never opens with its parent, or when a step it follows completes. A group that repeats by visit opens only on events, plus its expected entry step, whether it is optional or not.
+- **Nesting limits** are in the table under **Group instance creation triggers**: a `calendar-day` group can't be inside another one.
+
 **Group instance creation triggers.** Anything that needs a group instance joins the group's latest instance, unless a trigger opens a new one. The triggers are the same at every level of nesting, and are checked from the top-level group down (`StepGroupService.opensNewGroupInstance`).
 
 An event for a group is an event for any step inside it: a step directly in the group, or a step in one of its nested groups.
