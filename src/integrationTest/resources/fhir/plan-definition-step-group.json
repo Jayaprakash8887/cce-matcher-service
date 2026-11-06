@@ -11,7 +11,6 @@
     {
       "id": "visit",
       "title": "Visit",
-      "requiredBehavior": "must",
       "groupingBehavior": "logical-group",
       "type": {
         "coding": [
