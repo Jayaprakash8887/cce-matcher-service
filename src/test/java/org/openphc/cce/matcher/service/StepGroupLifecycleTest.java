@@ -12,7 +12,6 @@ import org.hl7.fhir.r4.model.PlanDefinition.ActionRequiredBehavior;
 import org.hl7.fhir.r4.model.PlanDefinition.PlanDefinitionActionComponent;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -225,6 +224,19 @@ class StepGroupLifecycleTest {
     private void use(PlanDefinition pd) {
         PlanDefinitionParser parser = new PlanDefinitionParser(fhirContext);
         parser.validateGroups(pd);
+        List<PlanDefinitionParser.StepMetadata> steps = parser.extractSteps(pd);
+        List<PlanDefinitionParser.GroupMetadata> groups = parser.extractGroups(pd);
+        protocol = new ParsedProtocolCache.ParsedProtocol(
+                steps, PlanDefinitionParser.buildDependencyGraph(steps, groups), groups);
+    }
+
+    /**
+     * Like {@link #use}, without the load check that refuses a mandatory group. Mandatory groups come in a
+     * later phase (plan point 11): the Protocol Service refuses them at load for now, but the engine already
+     * handles them, and these tests keep that code working until the check is lifted.
+     */
+    private void useWithMandatoryGroups(PlanDefinition pd) {
+        PlanDefinitionParser parser = new PlanDefinitionParser(fhirContext);
         List<PlanDefinitionParser.StepMetadata> steps = parser.extractSteps(pd);
         List<PlanDefinitionParser.GroupMetadata> groups = parser.extractGroups(pd);
         protocol = new ParsedProtocolCache.ParsedProtocol(
@@ -821,7 +833,6 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
-    @Disabled("Mandatory groups come in a later phase (plan point 11). Re-enable when the load check on a group's requiredBehavior is lifted.")
     class NestedGroupFollowsAStepOutsideItsParent {
 
         /**
@@ -839,7 +850,7 @@ class StepGroupLifecycleTest {
             step(lab.addAction(), "lab-order", "must");
             PlanDefinitionActionComponent imaging = mandatoryGroup(visit.addAction(), "imaging");
             after(step(imaging.addAction(), "scan", "must"), "registration", 7);
-            use(pd);
+            useWithMandatoryGroups(pd);
         }
 
         @Test
@@ -1609,7 +1620,6 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
-    @Disabled("Mandatory groups come in a later phase (plan point 11). Re-enable when the load check on a group's requiredBehavior is lifted.")
     class ClinicVisit {
 
         /** A visit: intake, and a measurements group holding BP; nothing waits on anything. */
@@ -1620,7 +1630,7 @@ class StepGroupLifecycleTest {
             step(visit.addAction(), "intake", "must");
             PlanDefinitionActionComponent measurements = mandatoryGroup(visit.addAction(), "measurements");
             step(measurements.addAction(), "bp", "must");
-            use(pd);
+            useWithMandatoryGroups(pd);
         }
 
         @Test
@@ -1635,7 +1645,6 @@ class StepGroupLifecycleTest {
     }
 
     @Nested
-    @Disabled("Mandatory groups come in a later phase (plan point 11). Re-enable when the load check on a group's requiredBehavior is lifted.")
     class TwoPrerequisites {
 
         /** A review group due 10 days after the assessment starts, and 5 days after the labs end. */
@@ -1648,7 +1657,7 @@ class StepGroupLifecycleTest {
             afterStart(review, "assessment", 10);
             after(review, "labs", 5);
             step(review.addAction(), "summary", "must");
-            use(pd);
+            useWithMandatoryGroups(pd);
         }
 
         @Test
