@@ -47,6 +47,10 @@ public class MatcherEngine {
     private final ProtocolDefinitionService protocolDefinitionService;
     private final ProtocolInstanceService protocolInstanceService;
     private final StepInstanceService stepInstanceService;
+    private final EnrollmentLoader enrollmentLoader;
+    private final OrderViolationDetector orderViolationDetector;
+    private final ProgressiveInstantiationService progressiveInstantiationService;
+    private final MandatoryStepBackfillService mandatoryStepBackfillService;
     private final ParsedProtocolCache parsedProtocolCache;
     private final IntelligenceActionEvaluator intelligenceActionEvaluator;
     private final ClinicalEventTimeExtractor clinicalEventTimeExtractor;
@@ -66,6 +70,10 @@ public class MatcherEngine {
                             ProtocolDefinitionService protocolDefinitionService,
                             ProtocolInstanceService protocolInstanceService,
                             StepInstanceService stepInstanceService,
+                            EnrollmentLoader enrollmentLoader,
+                            OrderViolationDetector orderViolationDetector,
+                            ProgressiveInstantiationService progressiveInstantiationService,
+                            MandatoryStepBackfillService mandatoryStepBackfillService,
                             ParsedProtocolCache parsedProtocolCache,
                             IntelligenceActionEvaluator intelligenceActionEvaluator,
                             ClinicalEventTimeExtractor clinicalEventTimeExtractor,
@@ -78,6 +86,10 @@ public class MatcherEngine {
         this.protocolDefinitionService = protocolDefinitionService;
         this.protocolInstanceService = protocolInstanceService;
         this.stepInstanceService = stepInstanceService;
+        this.enrollmentLoader = enrollmentLoader;
+        this.orderViolationDetector = orderViolationDetector;
+        this.progressiveInstantiationService = progressiveInstantiationService;
+        this.mandatoryStepBackfillService = mandatoryStepBackfillService;
         this.parsedProtocolCache = parsedProtocolCache;
         this.intelligenceActionEvaluator = intelligenceActionEvaluator;
         this.clinicalEventTimeExtractor = clinicalEventTimeExtractor;
@@ -179,13 +191,7 @@ public class MatcherEngine {
 
         OffsetDateTime now = OffsetDateTime.now(ZoneOffset.UTC);
         OffsetDateTime occurredAt = notAfter(resolveOccurredAt(event), now);
-        StepInstance stepInstance = stepInstanceService.stepInstanceForEvent(protocolInstance, stepActionId, now,
-                occurredAt);
-
-        stepInstanceService.completeStepInstance(stepInstance, eventLog.getId(), event.getSource(), occurredAt);
-
-        // Evaluate intelligence actions after step completion
-        intelligenceActionEvaluator.evaluateOnCompletion(stepInstance, event.getData());
+        processMatchedStep(protocolInstance, stepActionId, event, eventLog, now, occurredAt);
 
         eventLogService.updateStatus(eventLog, ProcessingStatus.MATCHED);
         eventsMatchedCounter.increment();
@@ -264,12 +270,37 @@ public class MatcherEngine {
         ProtocolInstance protocolInstance = protocolInstanceService.enrollPatient(
                 patientId, protocolDef, occurredAt);
 
-        StepInstance stepInstance = stepInstanceService.stepInstanceForEvent(protocolInstance, match.stepActionId(),
-                now, occurredAt);
+        processMatchedStep(protocolInstance, match.stepActionId(), event, eventLog, now, occurredAt);
+    }
 
+    /**
+     * The core flow for one matched step in one enrollment, for a trigger match and an explicit match
+     * alike:
+     * <ol>
+     *   <li>the step instance the event completes, found or created (see
+     *       {@link StepInstanceService#stepInstanceForEvent});</li>
+     *   <li>its completion;</li>
+     *   <li>what follows from the completion, in this order: the order-violation check, progressive
+     *       instantiation, then backfill. Backfill runs last on purpose: a backfilled step instance must not
+     *       count as an incomplete prerequisite of the completion that revealed it, nor be created for a
+     *       step that progressive instantiation has just created;</li>
+     *   <li>intelligence actions.</li>
+     * </ol>
+     */
+    private void processMatchedStep(ProtocolInstance protocolInstance, String stepActionId,
+                                    CloudEventMessage event, MatcherEventLog eventLog,
+                                    OffsetDateTime now, OffsetDateTime occurredAt) {
+        StepInstance stepInstance = stepInstanceService.stepInstanceForEvent(protocolInstance, stepActionId, now,
+                occurredAt);
         stepInstanceService.completeStepInstance(stepInstance, eventLog.getId(), event.getSource(), occurredAt);
 
-        // Evaluate intelligence actions after step completion
+        // What follows from the completion. It may create step instances and open a step group instance,
+        // so it works on the enrollment as read under its lock.
+        Enrollment enrollment = enrollmentLoader.lockAndLoad(protocolInstance);
+        orderViolationDetector.detectOrderViolations(enrollment, stepInstance);
+        progressiveInstantiationService.instantiateDependents(enrollment, stepInstance);
+        mandatoryStepBackfillService.backfillMissingMandatorySteps(enrollment, stepInstance);
+
         intelligenceActionEvaluator.evaluateOnCompletion(stepInstance, event.getData());
     }
 

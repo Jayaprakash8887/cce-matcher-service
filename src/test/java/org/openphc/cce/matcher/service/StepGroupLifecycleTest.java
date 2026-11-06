@@ -82,6 +82,10 @@ class StepGroupLifecycleTest {
     private final List<StepGroupInstance> groupRows = new ArrayList<>();
 
     private StepInstanceService service;
+    private EnrollmentLoader enrollmentLoader;
+    private OrderViolationDetector orderViolationDetector;
+    private ProgressiveInstantiationService progressiveInstantiationService;
+    private MandatoryStepBackfillService mandatoryStepBackfillService;
     private StepCreationService stepCreationService;
     private ProtocolInstance enrollment;
     private ParsedProtocolCache.ParsedProtocol protocol;
@@ -98,13 +102,17 @@ class StepGroupLifecycleTest {
         StepInstanceScope stepInstanceScope = new StepInstanceScope(groupInstanceRepository);
         StepGroupService groupService =
                 new StepGroupService(groupInstanceRepository, stepCreationService, stepInstanceScope, KIGALI);
-        service = new StepInstanceService(stepInstanceRepository, parsedProtocolCache, stateTransitionHistoryWriter,
-                slaScheduleService, slaThresholdReader,
+        enrollmentLoader = new EnrollmentLoader(
                 new ProtocolInstanceService(protocolInstanceRepository, stateTransitionHistoryWriter),
-                groupService, stepCreationService,
-                new OrderViolationDetector(stepInstanceScope, deviationRecorder, intelligenceActionEvaluator),
-                new ProgressiveInstantiationService(groupService, stepInstanceScope, stepCreationService),
-                new MandatoryStepBackfillService(groupService, stepInstanceScope, stepCreationService));
+                stepInstanceRepository, parsedProtocolCache);
+        service = new StepInstanceService(stepInstanceRepository, enrollmentLoader, stateTransitionHistoryWriter,
+                slaScheduleService, groupService, stepCreationService);
+        orderViolationDetector =
+                new OrderViolationDetector(stepInstanceScope, deviationRecorder, intelligenceActionEvaluator);
+        progressiveInstantiationService = new ProgressiveInstantiationService(groupService, stepInstanceScope,
+                stepCreationService, slaThresholdReader);
+        mandatoryStepBackfillService =
+                new MandatoryStepBackfillService(groupService, stepInstanceScope, stepCreationService);
 
         enrollment = ProtocolInstance.builder()
                 .id(UUID.randomUUID())
@@ -223,11 +231,23 @@ class StepGroupLifecycleTest {
                 steps, PlanDefinitionParser.buildDependencyGraph(steps, groups), groups);
     }
 
-    /** What {@code MatcherEngine.processMatch} does with a matched event, at clinical time {@code at}. */
+    /** What {@code MatcherEngine.processMatchedStep} does with a matched event, at clinical time {@code at}. */
     private StepInstance record(String actionId, OffsetDateTime at) {
         StepInstance row = rowFor(actionId, at);
-        service.completeStepInstance(row, UUID.randomUUID(), "test", at);
+        completeAndFollowUp(row, at);
         return row;
+    }
+
+    /**
+     * What {@code MatcherEngine.processMatchedStep} does with a step instance: complete it, then run what
+     * follows from the completion, in the same order.
+     */
+    private void completeAndFollowUp(StepInstance stepInstance, OffsetDateTime at) {
+        service.completeStepInstance(stepInstance, UUID.randomUUID(), "test", at);
+        Enrollment enrollment = enrollmentLoader.lockAndLoad(stepInstance.getProtocolInstance());
+        orderViolationDetector.detectOrderViolations(enrollment, stepInstance);
+        progressiveInstantiationService.instantiateDependents(enrollment, stepInstance);
+        mandatoryStepBackfillService.backfillMissingMandatorySteps(enrollment, stepInstance);
     }
 
     /** The row {@code MatcherEngine} picks for an event at clinical time {@code at}, created if need be. */
@@ -1540,11 +1560,11 @@ class StepGroupLifecycleTest {
             stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
             StepInstance examination = stepCreationService.createStep(
                     enrollment, "examination", 0, T0.plusDays(14), null, "must", current);
-            service.completeStepInstance(examination, UUID.randomUUID(), "test", T0.plusDays(14));
+            completeAndFollowUp(examination, T0.plusDays(14));
 
             StepInstance prescription = rowsFor("prescription").get(0);
             assertEquals(current.getId(), groupInstanceIdOf(prescription));
-            service.completeStepInstance(prescription, UUID.randomUUID(), "test", T0.plusDays(14).plusMinutes(30));
+            completeAndFollowUp(prescription, T0.plusDays(14).plusMinutes(30));
 
             verify(deviationRecorder, never()).recordDeviation(any(), any(), any());
         }
@@ -1563,7 +1583,7 @@ class StepGroupLifecycleTest {
             StepInstance undone = stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
             StepInstance latest = stepCreationService.createStep(
                     enrollment, "examination", 0, T0.plusDays(14), null, "must", current);
-            service.completeStepInstance(latest, UUID.randomUUID(), "test", T0.plusDays(14));
+            completeAndFollowUp(latest, T0.plusDays(14));
 
             StepInstance row = rowFor("examination", T0.plusDays(1));
 
@@ -1575,12 +1595,12 @@ class StepGroupLifecycleTest {
         @Test
         void aPredecessorMissingFromThisCycleIsBackfilledIntoIt_evenThoughAnEarlierCycleHasOne() {
             StepInstance done = stepCreationService.createStep(enrollment, "examination", 0, T0, null, "must", earlier);
-            service.completeStepInstance(done, UUID.randomUUID(), "test", T0);
+            completeAndFollowUp(done, T0);
             int examinationsBefore = rowsFor("examination").size();
 
             StepInstance prescription = stepCreationService.createStep(
                     enrollment, "prescription", 0, T0.plusDays(14), null, "must", current);
-            service.completeStepInstance(prescription, UUID.randomUUID(), "test", T0.plusDays(14));
+            completeAndFollowUp(prescription, T0.plusDays(14));
 
             List<StepInstance> examinations = rowsFor("examination");
             assertEquals(examinationsBefore + 1, examinations.size());

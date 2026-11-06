@@ -22,6 +22,7 @@ sequenceDiagram
     participant ExprEval as FhirExpressionEvaluator<br/>(JSONLogic + FHIRPath)
     participant ProtoInst as ProtocolInstanceService
     participant StepInst as StepInstanceService
+    participant FollowUps as OrderViolationDetector,<br/>ProgressiveInstantiationService,<br/>MandatoryStepBackfillService
     participant Intel as IntelligenceActionEvaluator
     participant DB as PostgreSQL
 
@@ -116,8 +117,11 @@ sequenceDiagram
                     end
 
                     Engine->>StepInst: completeStepInstance(stepInstance, eventLogId, source, occurredAt)
-                    Note over StepInst: Single call — internally sets completed_at (clinical time,<br/>clamped to now), detects order violations, runs progressive<br/>instantiation of mandatory dependents (see §9), backfills<br/>unrecorded mandatory predecessors (see §9). Does NOT set<br/>sla_status — timeliness is the Step SLA Service's call
+                    Note over StepInst: Records the completion only: sets completed_at (clinical time,<br/>clamped to now). Does NOT set sla_status —<br/>timeliness is the Step SLA Service's call
                     StepInst->>DB: UPDATE step_instance SET step_status=COMPLETED,<br/>completed_at, matched_event_id
+
+                    Engine->>FollowUps: what follows the completion, in order (see §9):<br/>detectOrderViolations → instantiateDependents → backfillMissingMandatorySteps
+                    Note over FollowUps: Run by MatcherEngine on the enrollment read under its lock<br/>(EnrollmentLoader.lockAndLoad)
 
                     Engine->>Intel: evaluateOnCompletion(stepInstance, eventPayload)
 
@@ -304,7 +308,7 @@ also owns intelligence evaluation for them.
 
 ```mermaid
 flowchart TD
-    T2["completeStepInstance(): a must-predecessor is still outstanding<br/>(OrderViolationDetector)"]
+    T2["After completeStepInstance(): a must-predecessor is still outstanding<br/>(OrderViolationDetector, run by MatcherEngine)"]
     T2 -->|"type=ORDER_VIOLATION<br/>+ incompletePrerequisites metadata"| RD
 
     RD["DeviationRecorder.recordDeviation()"]

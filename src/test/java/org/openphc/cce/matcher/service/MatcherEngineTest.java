@@ -51,6 +51,10 @@ class MatcherEngineTest {
     @Mock private ProtocolDefinitionService protocolDefinitionService;
     @Mock private ProtocolInstanceService protocolInstanceService;
     @Mock private StepInstanceService stepInstanceService;
+    @Mock private EnrollmentLoader enrollmentLoader;
+    @Mock private OrderViolationDetector orderViolationDetector;
+    @Mock private ProgressiveInstantiationService progressiveInstantiationService;
+    @Mock private MandatoryStepBackfillService mandatoryStepBackfillService;
     @Mock private ParsedProtocolCache parsedProtocolCache;
     @Mock private IntelligenceActionEvaluator intelligenceActionEvaluator;
     @Mock private ClinicalEventTimeExtractor clinicalEventTimeExtractor;
@@ -67,7 +71,8 @@ class MatcherEngineTest {
         engine = new MatcherEngine(eventLogService, resourceTypeDetector, eventCodesExtractor,
                 triggerMatchingService, fhirExpressionEvaluator,
                 protocolDefinitionService, protocolInstanceService,
-                stepInstanceService, parsedProtocolCache,
+                stepInstanceService, enrollmentLoader, orderViolationDetector,
+                progressiveInstantiationService, mandatoryStepBackfillService, parsedProtocolCache,
                 intelligenceActionEvaluator, clinicalEventTimeExtractor, meterRegistry);
     }
 
@@ -138,12 +143,22 @@ class MatcherEngineTest {
                     .thenReturn(protocolInstance);
             when(stepInstanceService.stepInstanceForEvent(eq(protocolInstance), eq("bp-check"), any(), any()))
                     .thenReturn(step);
+            Enrollment enrollment = new Enrollment(protocolInstance, null, List.of());
+            when(enrollmentLoader.lockAndLoad(protocolInstance)).thenReturn(enrollment);
 
             engine.processInboundEvent(event);
 
             verify(protocolInstanceService).enrollPatient(eq("patient-1"), eq(protocolDef), any());
-            verify(stepInstanceService).completeStepInstance(eq(step), eq(eventLog.getId()), eq(event.getSource()), any());
-            verify(intelligenceActionEvaluator).evaluateOnCompletion(eq(step), any());
+            // The core flow, then what follows from the completion, in order: backfill runs last.
+            var inOrder = inOrder(stepInstanceService, enrollmentLoader, orderViolationDetector,
+                    progressiveInstantiationService, mandatoryStepBackfillService, intelligenceActionEvaluator);
+            inOrder.verify(stepInstanceService).completeStepInstance(
+                    eq(step), eq(eventLog.getId()), eq(event.getSource()), any());
+            inOrder.verify(enrollmentLoader).lockAndLoad(protocolInstance);
+            inOrder.verify(orderViolationDetector).detectOrderViolations(enrollment, step);
+            inOrder.verify(progressiveInstantiationService).instantiateDependents(enrollment, step);
+            inOrder.verify(mandatoryStepBackfillService).backfillMissingMandatorySteps(enrollment, step);
+            inOrder.verify(intelligenceActionEvaluator).evaluateOnCompletion(eq(step), any());
             verify(eventLogService).updateStatus(eventLog, ProcessingStatus.MATCHED);
             assertEquals(1.0, meterRegistry.counter("cce.events.matched", "status", "matched").count());
         }
@@ -301,6 +316,10 @@ class MatcherEngineTest {
             engine.processInboundEvent(event);
 
             verify(stepInstanceService).completeStepInstance(eq(step), eq(eventLog.getId()), eq(event.getSource()), any());
+            // An explicit match runs what follows from the completion too.
+            verify(orderViolationDetector).detectOrderViolations(any(), eq(step));
+            verify(progressiveInstantiationService).instantiateDependents(any(), eq(step));
+            verify(mandatoryStepBackfillService).backfillMissingMandatorySteps(any(), eq(step));
             verify(intelligenceActionEvaluator).evaluateOnCompletion(eq(step), any());
             verify(eventLogService).updateStatus(eventLog, ProcessingStatus.MATCHED);
             // Should NOT call tier matching

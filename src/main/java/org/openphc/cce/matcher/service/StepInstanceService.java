@@ -1,16 +1,13 @@
 package org.openphc.cce.matcher.service;
 
-import org.openphc.cce.common.entity.ProtocolDefinition;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.StepGroupInstance;
 import org.openphc.cce.common.entity.StepInstance;
 import org.openphc.cce.common.enums.SlaStatus;
 import org.openphc.cce.common.enums.StepStatus;
-import org.openphc.cce.common.fhir.ParsedProtocolCache;
 import org.openphc.cce.common.fhir.PlanDefinitionParser;
 import org.openphc.cce.common.history.StateTransitionHistoryWriter;
 import org.openphc.cce.common.repository.StepInstanceRepository;
-import org.openphc.cce.common.sla.SlaThresholdReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -19,7 +16,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Optional;
 import java.util.UUID;
@@ -28,10 +24,10 @@ import java.util.UUID;
  * The core of the matcher: which step instance an event completes, and completing it.
  *
  * <p>For a step in a group, the group instance the event goes to is chosen first (see
- * {@link StepGroupService#groupInstanceForEvent}), then the step's instance in it. Completing a step
- * instance then runs what follows from it, each in its own class: the order-violation check
- * ({@link OrderViolationDetector}), progressive instantiation ({@link ProgressiveInstantiationService})
- * and backfill ({@link MandatoryStepBackfillService}).
+ * {@link StepGroupService#groupInstanceForEvent}), then the step's instance in it.
+ *
+ * <p>What follows a completion is not part of it, so {@link MatcherEngine} runs it after this class is
+ * done: the order-violation check, progressive instantiation and backfill.
  */
 @Service
 @Transactional
@@ -40,39 +36,24 @@ public class StepInstanceService {
     private static final Logger log = LoggerFactory.getLogger(StepInstanceService.class);
 
     private final StepInstanceRepository stepInstanceRepository;
-    private final ParsedProtocolCache parsedProtocolCache;
+    private final EnrollmentLoader enrollmentLoader;
     private final StateTransitionHistoryWriter stateTransitionHistoryWriter;
     private final StepSlaScheduleService slaScheduleService;
-    private final SlaThresholdReader slaThresholdReader;
-    private final ProtocolInstanceService protocolInstanceService;
     private final StepGroupService stepGroupService;
     private final StepCreationService stepCreationService;
-    private final OrderViolationDetector orderViolationDetector;
-    private final ProgressiveInstantiationService progressiveInstantiationService;
-    private final MandatoryStepBackfillService mandatoryStepBackfillService;
 
     public StepInstanceService(StepInstanceRepository stepInstanceRepository,
-                               ParsedProtocolCache parsedProtocolCache,
+                               EnrollmentLoader enrollmentLoader,
                                StateTransitionHistoryWriter stateTransitionHistoryWriter,
                                StepSlaScheduleService slaScheduleService,
-                               SlaThresholdReader slaThresholdReader,
-                               ProtocolInstanceService protocolInstanceService,
                                StepGroupService stepGroupService,
-                               StepCreationService stepCreationService,
-                               OrderViolationDetector orderViolationDetector,
-                               ProgressiveInstantiationService progressiveInstantiationService,
-                               MandatoryStepBackfillService mandatoryStepBackfillService) {
+                               StepCreationService stepCreationService) {
         this.stepInstanceRepository = stepInstanceRepository;
-        this.parsedProtocolCache = parsedProtocolCache;
+        this.enrollmentLoader = enrollmentLoader;
         this.stateTransitionHistoryWriter = stateTransitionHistoryWriter;
         this.slaScheduleService = slaScheduleService;
-        this.slaThresholdReader = slaThresholdReader;
-        this.protocolInstanceService = protocolInstanceService;
         this.stepGroupService = stepGroupService;
         this.stepCreationService = stepCreationService;
-        this.orderViolationDetector = orderViolationDetector;
-        this.progressiveInstantiationService = progressiveInstantiationService;
-        this.mandatoryStepBackfillService = mandatoryStepBackfillService;
     }
 
     // ── Which step instance an event completes ──
@@ -98,44 +79,46 @@ public class StepInstanceService {
      */
     public StepInstance stepInstanceForEvent(ProtocolInstance protocolInstance, String stepActionId,
                                              OffsetDateTime now, OffsetDateTime occurredAt) {
-        ParsedProtocolCache.ParsedProtocol protocol = parsedProtocol(protocolInstance);
-        PlanDefinitionParser.StepMetadata matchedStepMetadata = protocol.step(stepActionId);
+        PlanDefinitionParser.StepMetadata matchedStepMetadata =
+                enrollmentLoader.parsedProtocol(protocolInstance).step(stepActionId);
         if (matchedStepMetadata == null || matchedStepMetadata.groupId() == null) {
             // Outside any group, or an action the protocol doesn't declare: there is no group instance to
             // choose, so the step's open instance is looked for across the enrollment.
-            return openStepInstance(protocolInstance, stepActionId, occurredAt)
+            return findOpenStepInstance(protocolInstance, stepActionId, occurredAt)
                     .orElseGet(() -> createStepInstanceForEvent(protocolInstance, stepActionId, matchedStepMetadata,
                             now, null));
         }
 
         // In a group: under the enrollment's lock, first the group instance the event goes to, then the
         // step's open instance in it.
-        Enrollment enrollment = lockAndLoad(protocolInstance, protocol);
+        Enrollment enrollment = enrollmentLoader.lockAndLoad(protocolInstance);
         StepGroupInstance groupInstance =
                 stepGroupService.groupInstanceForEvent(enrollment, matchedStepMetadata, occurredAt);
-        return openStepInstanceIn(enrollment, groupInstance, stepActionId, occurredAt)
+        return findOpenStepInstanceIn(enrollment, groupInstance, stepActionId, occurredAt)
                 .orElseGet(() -> createStepInstanceForEvent(protocolInstance, stepActionId, matchedStepMetadata,
                         now, groupInstance));
     }
 
     /**
-     * {@code stepActionId}'s open step instance in the enrollment, for a step outside any group. Open means
-     * its event has not arrived, whatever its SLA: a step whose SLA is already MISSED is still picked up by
-     * a late event rather than a duplicate being created for it.
+     * Finds {@code stepActionId}'s open step instance in the enrollment, for a step outside any group. It
+     * creates nothing. Open means its event has not arrived, whatever its SLA: a step whose SLA is already
+     * MISSED is still picked up by a late event rather than a duplicate being created for it.
      */
-    private Optional<StepInstance> openStepInstance(ProtocolInstance protocolInstance, String stepActionId,
+    private Optional<StepInstance> findOpenStepInstance(ProtocolInstance protocolInstance, String stepActionId,
                                                     OffsetDateTime occurredAt) {
         return stepInstanceRepository.findByProtocolInstanceIdAndActionIdAndStepStatus(
                         protocolInstance.getId(), stepActionId, StepStatus.NOT_STARTED).stream()
                 .min(nearestDueDate(occurredAt));
     }
 
-    /** {@code stepActionId}'s open step instance in {@code groupInstance} itself. */
-    private static Optional<StepInstance> openStepInstanceIn(Enrollment enrollment, StepGroupInstance groupInstance,
-                                                             String stepActionId, OffsetDateTime occurredAt) {
-        return enrollment.stepInstances().stream()
-                .filter(stepInstance -> stepActionId.equals(stepInstance.getActionId())
-                        && stepInstance.getStepStatus() == StepStatus.NOT_STARTED
+    /**
+     * Finds {@code stepActionId}'s open step instance in {@code groupInstance} itself. It creates nothing.
+     */
+    private static Optional<StepInstance> findOpenStepInstanceIn(Enrollment enrollment,
+                                                                 StepGroupInstance groupInstance,
+                                                                 String stepActionId, OffsetDateTime occurredAt) {
+        return enrollment.stepInstancesOf(stepActionId).stream()
+                .filter(stepInstance -> stepInstance.getStepStatus() == StepStatus.NOT_STARTED
                         && StepInstanceScope.isDirectlyIn(stepInstance, groupInstance))
                 .min(nearestDueDate(occurredAt));
     }
@@ -178,23 +161,18 @@ public class StepInstanceService {
     // ── Completing a step instance ──
 
     /**
-     * Complete a step instance: record that its event arrived, then run what follows from it, in order:
-     * <ol>
-     *   <li>the order-violation check ({@link OrderViolationDetector});</li>
-     *   <li>progressive instantiation: the steps and groups that follow it
-     *       ({@link ProgressiveInstantiationService});</li>
-     *   <li>backfill: the mandatory steps the journey skipped ({@link MandatoryStepBackfillService}). It
-     *       runs last on purpose: a backfilled step instance must not count as an incomplete prerequisite
-     *       of the completion that revealed it, nor be created for a step that progressive instantiation
-     *       has just created.</li>
-     * </ol>
+     * Complete a step instance: record that its event arrived, and schedule the judgement of whether it was
+     * on time. What follows from the completion is not part of it: {@link MatcherEngine#processMatchedStep}
+     * runs that next. Package-private so that only the matcher's own flow completes a step instance; a
+     * caller that completed one on its own would skip the order-violation check, progressive instantiation
+     * and backfill.
      *
      * <p>Completability depends only on {@link StepStatus} — a step whose SLA is already
      * {@link SlaStatus#MISSED} can still be completed by a late event. The step instance then records
      * both facts: the event arrived, and the SLA was missed.
      */
-    public void completeStepInstance(StepInstance stepInstance, UUID matchedEventId, String completedBySource,
-                                     OffsetDateTime occurredAt) {
+    void completeStepInstance(StepInstance stepInstance, UUID matchedEventId, String completedBySource,
+                              OffsetDateTime occurredAt) {
         if (stepInstance.getStepStatus() != StepStatus.NOT_STARTED) {
             // A step instance completes once. Refusing a second completion keeps what follows it, an order
             // violation among them, to a single run.
@@ -202,28 +180,6 @@ public class StepInstanceService {
                     "Cannot complete step with stepStatus " + stepInstance.getStepStatus() + ": " + stepInstance.getId());
         }
 
-        // Read once, to anchor an after-start dependent to when this step became active. Not used to
-        // settle this step's own SLA: that is the Step SLA Service's judgement, made on its next
-        // sweep, by comparing the completed_at recorded below against each threshold.
-        SlaThresholdReader.SlaThresholds slaThresholds = slaThresholdReader.getThresholds(stepInstance.getId());
-
-        recordCompletion(stepInstance, matchedEventId, completedBySource, occurredAt);
-
-        // What follows may open a step group instance, so it works on the enrollment as read under its lock.
-        ProtocolInstance protocolInstance = stepInstance.getProtocolInstance();
-        Enrollment enrollment = lockAndLoad(protocolInstance, parsedProtocol(protocolInstance));
-
-        orderViolationDetector.detectOrderViolations(enrollment, stepInstance);
-        progressiveInstantiationService.instantiateDependents(enrollment, stepInstance, slaThresholds);
-        mandatoryStepBackfillService.backfillMissingMandatorySteps(enrollment, stepInstance);
-    }
-
-    /**
-     * Record that {@code stepInstance}'s event arrived, and schedule the judgement of whether it was on
-     * time.
-     */
-    private void recordCompletion(StepInstance stepInstance, UUID matchedEventId, String completedBySource,
-                                  OffsetDateTime occurredAt) {
         // completedAt is the clinical occurrence time (when the act happened), not the ingestion
         // time — so dependent steps' due/missed dates and the SLA outcome reflect real-world timing
         // rather than how long the event took to reach us. Clamp to now(): a step cannot have
@@ -253,22 +209,5 @@ public class StepInstanceService {
 
         log.info("Completed step: stepId={}, actionId={}, completedAt={} (SLA judged by the Step SLA Service)",
                 stepInstance.getId(), stepInstance.getActionId(), completedAt);
-    }
-
-    // ── The enrollment ──
-
-    /**
-     * The enrollment as the work for one event sees it: locked first when its protocol has step groups
-     * (see {@link ProtocolInstanceService#lockProtocolInstance}), then its step instances read once.
-     */
-    private Enrollment lockAndLoad(ProtocolInstance protocolInstance, ParsedProtocolCache.ParsedProtocol protocol) {
-        protocolInstanceService.lockProtocolInstance(protocolInstance, protocol);
-        return new Enrollment(protocolInstance, protocol,
-                new ArrayList<>(stepInstanceRepository.findByProtocolInstanceId(protocolInstance.getId())));
-    }
-
-    private ParsedProtocolCache.ParsedProtocol parsedProtocol(ProtocolInstance protocolInstance) {
-        ProtocolDefinition protocolDef = protocolInstance.getProtocolDefinition();
-        return parsedProtocolCache.get(protocolDef.getId(), () -> protocolDef.getDefinition().toString());
     }
 }

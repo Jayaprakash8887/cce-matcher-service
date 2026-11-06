@@ -75,6 +75,10 @@ class StepInstanceServiceTest {
     private ProtocolInstanceService protocolInstanceService;
 
     private StepInstanceService service;
+    private EnrollmentLoader enrollmentLoader;
+    private OrderViolationDetector orderViolationDetector;
+    private ProgressiveInstantiationService progressiveInstantiationService;
+    private MandatoryStepBackfillService mandatoryStepBackfillService;
     private StepCreationService stepCreationService;
     private ObjectMapper objectMapper;
 
@@ -87,11 +91,15 @@ class StepInstanceServiceTest {
         StepInstanceScope stepInstanceScope = new StepInstanceScope(groupInstanceRepository);
         StepGroupService stepGroupService =
                 new StepGroupService(groupInstanceRepository, stepCreationService, stepInstanceScope, ZoneOffset.UTC);
-        service = new StepInstanceService(stepInstanceRepository, parsedProtocolCache, stateTransitionHistoryWriter,
-                slaScheduleService, slaThresholdReader, protocolInstanceService, stepGroupService, stepCreationService,
-                new OrderViolationDetector(stepInstanceScope, deviationRecorder, intelligenceActionEvaluator),
-                new ProgressiveInstantiationService(stepGroupService, stepInstanceScope, stepCreationService),
-                new MandatoryStepBackfillService(stepGroupService, stepInstanceScope, stepCreationService));
+        enrollmentLoader = new EnrollmentLoader(protocolInstanceService, stepInstanceRepository, parsedProtocolCache);
+        service = new StepInstanceService(stepInstanceRepository, enrollmentLoader, stateTransitionHistoryWriter,
+                slaScheduleService, stepGroupService, stepCreationService);
+        orderViolationDetector =
+                new OrderViolationDetector(stepInstanceScope, deviationRecorder, intelligenceActionEvaluator);
+        progressiveInstantiationService = new ProgressiveInstantiationService(stepGroupService, stepInstanceScope,
+                stepCreationService, slaThresholdReader);
+        mandatoryStepBackfillService =
+                new MandatoryStepBackfillService(stepGroupService, stepInstanceScope, stepCreationService);
 
         // Default: no SLA thresholds. Tests that care stub them per step via buildStep/stubThresholds.
         lenient().when(slaThresholdReader.getThresholds(any()))
@@ -102,6 +110,19 @@ class StepInstanceServiceTest {
         lenient().when(parsedProtocolCache.get(any(), any()))
                 .thenReturn(new ParsedProtocolCache.ParsedProtocol(
                         List.of(), PlanDefinitionParser.buildDependencyGraph(List.of())));
+    }
+
+    /**
+     * What {@code MatcherEngine.processMatchedStep} does with a step instance: complete it, then run what
+     * follows from the completion, in the same order.
+     */
+    private void completeAndFollowUp(StepInstance stepInstance, UUID matchedEventId, String completedBySource,
+                                     OffsetDateTime occurredAt) {
+        service.completeStepInstance(stepInstance, matchedEventId, completedBySource, occurredAt);
+        Enrollment enrollment = enrollmentLoader.lockAndLoad(stepInstance.getProtocolInstance());
+        orderViolationDetector.detectOrderViolations(enrollment, stepInstance);
+        progressiveInstantiationService.instantiateDependents(enrollment, stepInstance);
+        mandatoryStepBackfillService.backfillMissingMandatorySteps(enrollment, stepInstance);
     }
 
     /** Stub the parsed-protocol cache to return {@code steps} and the graph derived from them. */
@@ -236,7 +257,7 @@ class StepInstanceServiceTest {
             lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
 
             UUID eventId = UUID.randomUUID();
-            service.completeStepInstance(step, eventId, "test-source", null);
+            completeAndFollowUp(step, eventId, "test-source", null);
 
             assertEquals(StepStatus.COMPLETED, step.getStepStatus());
             // Matcher records that the work happened and when; whether that was timely is the
@@ -263,7 +284,7 @@ class StepInstanceServiceTest {
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             verify(slaScheduleService).scheduleMetIfOnTime(eq(step), any(OffsetDateTime.class));
             assertNull(step.getSlaStatus(), "sla_status is still Step SLA's to write");
@@ -278,7 +299,7 @@ class StepInstanceServiceTest {
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             // Recorded late, so the breach stands even though the work is now done
             assertEquals(StepStatus.COMPLETED, step.getStepStatus());
@@ -294,7 +315,7 @@ class StepInstanceServiceTest {
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             // The pairing the old single-column model could not express: done, but missed
             assertEquals(StepStatus.COMPLETED, step.getStepStatus());
@@ -306,7 +327,7 @@ class StepInstanceServiceTest {
             StepInstance step = buildStep(StepStatus.COMPLETED, SlaStatus.MET, null, null);
 
             assertThrows(IllegalStateException.class,
-                    () -> service.completeStepInstance(step, UUID.randomUUID(), "src", null));
+                    () -> completeAndFollowUp(step, UUID.randomUUID(), "src", null));
         }
 
         @Test
@@ -321,7 +342,7 @@ class StepInstanceServiceTest {
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
 
-            assertDoesNotThrow(() -> service.completeStepInstance(step, UUID.randomUUID(), "src", null));
+            assertDoesNotThrow(() -> completeAndFollowUp(step, UUID.randomUUID(), "src", null));
 
             assertEquals(StepStatus.COMPLETED, step.getStepStatus());
             assertEquals(SlaStatus.MISSED, step.getSlaStatus(), "the breach must survive the completion");
@@ -338,7 +359,7 @@ class StepInstanceServiceTest {
             when(stepInstanceRepository.save(any())).thenAnswer(i -> i.getArgument(0));
             lenient().when(stepInstanceRepository.findByProtocolInstanceId(any())).thenReturn(List.of(step));
 
-            assertDoesNotThrow(() -> service.completeStepInstance(step, UUID.randomUUID(), "src", null));
+            assertDoesNotThrow(() -> completeAndFollowUp(step, UUID.randomUUID(), "src", null));
 
             assertEquals(StepStatus.COMPLETED, step.getStepStatus());
             assertEquals(SlaStatus.MET, step.getSlaStatus());
@@ -374,7 +395,7 @@ class StepInstanceServiceTest {
                             null, 3, "must", List.of()));
             stubProtocol(actions);
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             // Verify: the completed step + the dependent step
             ArgumentCaptor<StepInstance> captor = ArgumentCaptor.forClass(StepInstance.class);
@@ -421,7 +442,7 @@ class StepInstanceServiceTest {
                             null, 3, "must", List.of()));
             stubProtocol(actions);
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             ArgumentCaptor<StepInstance> captor = ArgumentCaptor.forClass(StepInstance.class);
             verify(stepInstanceRepository, atLeast(2)).save(captor.capture());
@@ -466,7 +487,7 @@ class StepInstanceServiceTest {
                             timing, 3, "must", List.of()));
             stubProtocol(actions);
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             ArgumentCaptor<StepInstance> captor = ArgumentCaptor.forClass(StepInstance.class);
             verify(stepInstanceRepository, atLeast(4)).save(captor.capture());
@@ -528,7 +549,7 @@ class StepInstanceServiceTest {
                             null, 3, "must", List.of()));
             stubProtocol(actions);
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             ArgumentCaptor<StepInstance> captor = ArgumentCaptor.forClass(StepInstance.class);
             verify(stepInstanceRepository, atLeastOnce()).save(captor.capture());
@@ -583,7 +604,7 @@ class StepInstanceServiceTest {
 
             stubProtocol(fanInGraph());
 
-            service.completeStepInstance(intake, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(intake, UUID.randomUUID(), "test-source", null);
 
             ArgumentCaptor<StepInstance> captor = ArgumentCaptor.forClass(StepInstance.class);
             verify(stepInstanceRepository, atLeastOnce()).save(captor.capture());
@@ -616,7 +637,7 @@ class StepInstanceServiceTest {
                     new PlanDefinitionParser.StepMetadata("vitals-recording", "Vitals",
                             List.of(), List.of(), null, 1, "must", List.of())));
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
 
             ArgumentCaptor<StepInstance> captor = ArgumentCaptor.forClass(StepInstance.class);
             verify(stepInstanceRepository, atLeast(2)).save(captor.capture());
@@ -735,7 +756,7 @@ class StepInstanceServiceTest {
                                     amount == null ? null : BigDecimal.valueOf(amount), unit)),
                             null, 3, "must", List.of())));
 
-            service.completeStepInstance(step, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(step, UUID.randomUUID(), "test-source", null);
             return step.getCompletedAt();
         }
     }
@@ -787,7 +808,7 @@ class StepInstanceServiceTest {
             when(deviationRecorder.recordDeviation(any(), eq(DeviationType.ORDER_VIOLATION), any()))
                     .thenReturn(deviation);
 
-            service.completeStepInstance(completedStep, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(completedStep, UUID.randomUUID(), "test-source", null);
 
             verify(deviationRecorder).recordDeviation(
                     eq(completedStep), eq(DeviationType.ORDER_VIOLATION),
@@ -838,7 +859,7 @@ class StepInstanceServiceTest {
                             null, 1, "must", List.of()));
             stubProtocol(actions);
 
-            service.completeStepInstance(completedStep, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(completedStep, UUID.randomUUID(), "test-source", null);
 
             verify(deviationRecorder, never()).recordDeviation(
                     any(), eq(DeviationType.ORDER_VIOLATION), any());
@@ -883,7 +904,7 @@ class StepInstanceServiceTest {
                             null, 1, "must", List.of()));
             stubProtocol(actions);
 
-            service.completeStepInstance(completedStep, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(completedStep, UUID.randomUUID(), "test-source", null);
 
             verify(deviationRecorder, never()).recordDeviation(
                     any(), eq(DeviationType.ORDER_VIOLATION), any());
@@ -919,7 +940,7 @@ class StepInstanceServiceTest {
                             null, 1, "must", List.of()));
             stubProtocol(actions);
 
-            service.completeStepInstance(completedStep, UUID.randomUUID(), "test-source", null);
+            completeAndFollowUp(completedStep, UUID.randomUUID(), "test-source", null);
 
             verify(deviationRecorder, never()).recordDeviation(
                     any(), eq(DeviationType.ORDER_VIOLATION), any());
@@ -993,7 +1014,7 @@ class StepInstanceServiceTest {
                     .thenReturn(List.of(treatment));
             stubGraph(emrJourney());
 
-            service.completeStepInstance(treatment, UUID.randomUUID(), "ebuzima", occurredAt);
+            completeAndFollowUp(treatment, UUID.randomUUID(), "ebuzima", occurredAt);
 
             Map<String, StepInstance> backfilled = capturedStepsExcept("treatment");
 
@@ -1028,7 +1049,7 @@ class StepInstanceServiceTest {
                     .thenReturn(List.of(missedDiagnosis, treatment));
             stubGraph(emrJourney());
 
-            service.completeStepInstance(treatment, UUID.randomUUID(), "ebuzima", occurredAt);
+            completeAndFollowUp(treatment, UUID.randomUUID(), "ebuzima", occurredAt);
 
             // A mandatory action with any row — here a terminal MISSED one — is left alone.
             assertEquals(Set.of("vitals-recording", "consultation"),
@@ -1051,7 +1072,7 @@ class StepInstanceServiceTest {
                     .thenReturn(List.of(visit, vitals));
             stubGraph(emrJourney());
 
-            service.completeStepInstance(vitals, UUID.randomUUID(), "ebuzima", occurredAt);
+            completeAndFollowUp(vitals, UUID.randomUUID(), "ebuzima", occurredAt);
 
             // `consultation` is created by progressive instantiation (vitals-recording's dependent),
             // and nothing else — no mandatory action is missing at this point in the journey.
@@ -1075,7 +1096,7 @@ class StepInstanceServiceTest {
                     .thenReturn(List.of(vitals, consultation, chiefComplaints));
             stubGraph(emrJourney());
 
-            service.completeStepInstance(chiefComplaints, UUID.randomUUID(), "ebuzima", occurredAt);
+            completeAndFollowUp(chiefComplaints, UUID.randomUUID(), "ebuzima", occurredAt);
 
             // `diagnosis` is mandatory and shares the completed step's nesting group, but the
             // forward chain has not reached it — backfilling it here would stamp it with this
@@ -1106,7 +1127,7 @@ class StepInstanceServiceTest {
                     .thenReturn(List.of(vitals, consultation, chiefComplaints, treatment));
             stubGraph(emrJourney());
 
-            service.completeStepInstance(treatment, UUID.randomUUID(), "ebuzima", occurredAt);
+            completeAndFollowUp(treatment, UUID.randomUUID(), "ebuzima", occurredAt);
 
             // `diagnosis` is now a predecessor of observed progress, so it is genuinely late and
             // gets materialized.
@@ -1128,7 +1149,7 @@ class StepInstanceServiceTest {
                     action("vitals-recording", null, "must", null),
                     action("consultation", "vitals-recording", "must", null)));
 
-            service.completeStepInstance(consultation, UUID.randomUUID(), "ebuzima", occurredAt);
+            completeAndFollowUp(consultation, UUID.randomUUID(), "ebuzima", occurredAt);
 
             StepInstance backfilled = capturedStepsExcept("consultation").get("vitals-recording");
             assertNotNull(backfilled);

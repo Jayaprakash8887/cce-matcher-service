@@ -68,7 +68,9 @@ class ActuatorMetricsTest {
                 mock(EventCodesExtractor.class),
                 mock(TriggerMatchingService.class), mock(FhirExpressionEvaluator.class),
                 mock(ProtocolDefinitionService.class), mock(ProtocolInstanceService.class),
-                mock(StepInstanceService.class), mock(ParsedProtocolCache.class),
+                mock(StepInstanceService.class), mock(EnrollmentLoader.class),
+                mock(OrderViolationDetector.class), mock(ProgressiveInstantiationService.class),
+                mock(MandatoryStepBackfillService.class), mock(ParsedProtocolCache.class),
                 evaluator, mock(ClinicalEventTimeExtractor.class), registry);
 
         new IntelligenceTriggerProducer(

@@ -1,8 +1,10 @@
 package org.openphc.cce.matcher;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.RepeatedTest;
 import org.openphc.cce.common.entity.ProtocolDefinition;
+import org.openphc.cce.common.event.CloudEventMessage;
 import org.openphc.cce.common.entity.ProtocolInstance;
 import org.openphc.cce.common.entity.StepGroupInstance;
 import org.openphc.cce.common.entity.StepInstance;
@@ -11,7 +13,7 @@ import org.openphc.cce.common.enums.StepStatus;
 import org.openphc.cce.common.repository.ProtocolInstanceRepository;
 import org.openphc.cce.common.repository.StepGroupInstanceRepository;
 import org.openphc.cce.common.repository.StepInstanceRepository;
-import org.openphc.cce.matcher.service.StepInstanceService;
+import org.openphc.cce.matcher.service.MatcherEngine;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -40,7 +42,7 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
     private static final String FIXTURE = "src/integrationTest/resources/fhir/plan-definition-step-group.json";
 
     @Autowired
-    private StepInstanceService stepInstanceService;
+    private MatcherEngine matcherEngine;
 
     @Autowired
     private StepInstanceRepository stepInstanceRepository;
@@ -91,21 +93,21 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
     }
 
     /**
-     * Records each event as {@code MatcherEngine} does for a step in a group, each in its own transaction:
-     * find or create the step's row in the instance the event goes to, then complete it. Both start
-     * together, so each looks for the instance while the other may be opening it.
+     * Sends each event through {@link MatcherEngine} as an explicit match, each in its own transaction:
+     * find or create the step's row in the instance the event goes to, complete it, then run what follows
+     * from the completion. Both start together, so each looks for the instance while the other may be
+     * opening it.
      */
     private void recordAtOnce(UUID enrollmentId, List<String> actionIds, OffsetDateTime at) throws Exception {
         CyclicBarrier bothStarted = new CyclicBarrier(actionIds.size());
         ExecutorService pool = Executors.newFixedThreadPool(actionIds.size());
         try {
             List<Future<?>> events = actionIds.stream()
-                    .<Future<?>>map(actionId -> pool.submit(() -> tx.executeWithoutResult(status -> {
-                        ProtocolInstance enrollment = protocolInstanceRepository.findById(enrollmentId).orElseThrow();
+                    .<Future<?>>map(actionId -> pool.submit(() -> {
+                        CloudEventMessage event = explicitEvent(enrollmentId, actionId, at);
                         await(bothStarted);
-                        StepInstance row = stepInstanceService.stepInstanceForEvent(enrollment, actionId, at, at);
-                        stepInstanceService.completeStepInstance(row, UUID.randomUUID(), "test", at);
-                    })))
+                        matcherEngine.processInboundEvent(event);
+                    }))
                     .toList();
             for (Future<?> event : events) {
                 event.get(30, SECONDS);
@@ -113,6 +115,21 @@ class StepGroupConcurrencyIntegrationTest extends IntegrationTestBase {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    /** An event that names its enrollment and step, so it skips trigger matching. */
+    private static CloudEventMessage explicitEvent(UUID enrollmentId, String actionId, OffsetDateTime at) {
+        return CloudEventMessage.builder()
+                .id(UUID.randomUUID().toString())
+                .source("integration-test")
+                .type("org.openphc.test")
+                .specversion("1.0")
+                .time(at)
+                .datacontenttype("application/json")
+                .protocolinstanceid(enrollmentId.toString())
+                .actionid(actionId)
+                .data(new ObjectMapper().createObjectNode())
+                .build();
     }
 
     private static void await(CyclicBarrier barrier) {

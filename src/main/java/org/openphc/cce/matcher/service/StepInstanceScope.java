@@ -57,8 +57,7 @@ public class StepInstanceScope {
         } else {
             scope = latestGroupInstancePath(enrollment, stepMetadata.groupId()); // its group's latest cycle
         }
-        return enrollment.stepInstances().stream()
-                .filter(stepInstance -> stepActionId.equals(stepInstance.getActionId()))
+        return enrollment.stepInstancesOf(stepActionId).stream()
                 .filter(stepInstance -> scope == null || isInside(stepInstance.getStepGroupInstance(), scope))
                 .toList();
     }
@@ -98,8 +97,7 @@ public class StepInstanceScope {
      * ({@code groupInstance} null).
      */
     static boolean hasStepInstance(Enrollment enrollment, String stepActionId, StepGroupInstance groupInstance) {
-        return enrollment.stepInstances().stream()
-                .filter(stepInstance -> stepActionId.equals(stepInstance.getActionId()))
+        return enrollment.stepInstancesOf(stepActionId).stream()
                 .anyMatch(stepInstance -> groupInstance == null || isDirectlyIn(stepInstance, groupInstance));
     }
 

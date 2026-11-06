@@ -71,9 +71,7 @@ public class MandatoryStepBackfillService {
      */
     public void backfillMissingMandatorySteps(Enrollment enrollment, StepInstance completedStepInstance) {
         // The steps recorded so far, counting a step instance only where this completion's checks see it.
-        Set<String> observedStepIds = enrollment.stepInstances().stream()
-                .map(StepInstance::getActionId)
-                .distinct()
+        Set<String> observedStepIds = enrollment.stepIdsWithStepInstances().stream()
                 .filter(stepActionId -> !stepInstanceScope.stepInstancesInScope(enrollment, stepActionId,
                         completedStepInstance.getStepGroupInstance()).isEmpty())
                 .collect(Collectors.toSet());

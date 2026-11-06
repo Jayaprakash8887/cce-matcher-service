@@ -660,7 +660,7 @@ Each such step is created with `step_status = NOT_STARTED` and no SLA judgement 
   - If the event does arrive later, `stepInstanceForEvent` picks the row up and completes it. Matcher does not judge timeliness. So the breach the Step SLA Service records still reflects the `completed_at` it finds.
   - A step with no `tolerance-days` gets no missed threshold. It therefore never advances past `OVERDUE`.
   - Only mandatory steps are scheduled at all. `StepSlaScheduleService` writes no transition row for a step whose `requiredBehavior` is not `must`. Nothing was required of it, so nothing can be breached.
-- **Ordering within `completeStepInstance`.** Backfill runs *after* the order-violation check (`OrderViolationDetector`).
+- **Ordering after a completion.** `MatcherEngine` runs backfill *after* the order-violation check (`OrderViolationDetector`).
   - So a freshly backfilled row is never counted as an incomplete prerequisite for the completion that revealed it. This pass does not invent an `ORDER_VIOLATION`.
   - Subsequent completions do see those rows. So a genuinely out-of-order journey raises `ORDER_VIOLATION` from the next completion onward.
 - **Idempotent.** A mandatory step that already has any row, in any state, is left alone. That covers a row that is pre-existing, terminal, or created earlier in the same transaction by progressive instantiation. There is one row per step (`repeat_index` 0), regardless of `timing.repeat.count`. This is a placeholder for work never recorded, not a scheduled recurrence.
@@ -957,13 +957,13 @@ sequenceDiagram
 
     Note over Engine: Event matches "anc-visit-1" → step created & completed (own trigger)
     Engine->>SIS: completeStepInstance(anc-visit-1)
-    SIS->>PI: instantiateDependents()
+    Engine->>PI: instantiateDependents()
     Note over PI: no step declares anc-visit-1 as its prerequisite, nothing created
 
     Note over Engine: Later, independently — a ServiceRequest event matches<br/>"anc-visit-1-referral"'s own trigger
     Engine->>SIS: stepInstanceForEvent(anc-visit-1-referral)<br/>(none open, so created: no dependency on anc-visit-1 — nesting is organizational only)
     Engine->>SIS: completeStepInstance(anc-visit-1-referral)
-    SIS->>PI: instantiateDependents() — finds "anc-visit-1-referral-ack"<br/>(its relatedAction names anc-visit-1-referral, relationship after-end)
+    Engine->>PI: instantiateDependents() — finds "anc-visit-1-referral-ack"<br/>(its relatedAction names anc-visit-1-referral, relationship after-end)
     PI->>DB: Create anc-visit-1-referral-ack (NOT_STARTED, no SLA judgement)
 
     Note over Engine: Later — event matches "anc-visit-1-referral-ack" → completed
@@ -1354,9 +1354,12 @@ Other things this example shows:
 - So two events for one patient, processed at once, can't open the same instance twice, open two cycles for one day, or create the same step twice. The second, once it holds the lock, uses the rows the first created.
 
 **Where the code is:**
-- `StepInstanceService` is the core flow.
-  - `stepInstanceForEvent` picks the step instance an event completes. It asks `StepGroupService.groupInstanceForEvent` for the group instance first.
-  - `completeStepInstance` records the completion. Then it runs `OrderViolationDetector`, `ProgressiveInstantiationService` and `MandatoryStepBackfillService`, in that order.
+- `MatcherEngine.processMatchedStep` runs the flow for each matched step, in this order:
+  1. `StepInstanceService.stepInstanceForEvent` finds the step instance the event completes, or creates it. It asks `StepGroupService.groupInstanceForEvent` for the group instance first.
+  2. `StepInstanceService.completeStepInstance` records the completion. It does nothing else.
+  3. What follows from the completion: `OrderViolationDetector`, then `ProgressiveInstantiationService`, then `MandatoryStepBackfillService`.
+  4. Intelligence actions.
+- `EnrollmentLoader` locks the enrollment and reads its step instances once, into an `Enrollment`. The `Enrollment` keeps them by step, so a lookup reads only that step's step instances.
 - `StepGroupService` decides which group instance an event or a piece of work goes to, and opens instances.
 - `StepInstanceScope` reads a step's rows within the instance they count in.
 - All of them create rows through `StepCreationService`. It inserts a step with its SLA schedule and first history entry.

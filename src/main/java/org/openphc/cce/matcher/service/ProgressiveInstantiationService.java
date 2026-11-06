@@ -33,28 +33,31 @@ public class ProgressiveInstantiationService {
     private final StepGroupService stepGroupService;
     private final StepInstanceScope stepInstanceScope;
     private final StepCreationService stepCreationService;
+    private final SlaThresholdReader slaThresholdReader;
 
     public ProgressiveInstantiationService(StepGroupService stepGroupService,
                                            StepInstanceScope stepInstanceScope,
-                                           StepCreationService stepCreationService) {
+                                           StepCreationService stepCreationService,
+                                           SlaThresholdReader slaThresholdReader) {
         this.stepGroupService = stepGroupService;
         this.stepInstanceScope = stepInstanceScope;
         this.stepCreationService = stepCreationService;
+        this.slaThresholdReader = slaThresholdReader;
     }
 
     /**
      * Create what follows {@code completedStepInstance}: step instances for its dependent steps, then the
      * first instances of its dependent groups.
-     *
-     * @param completedThresholds the completed step instance's SLA thresholds: an {@code after-start}
-     *                            dependent counts from its due date, when the step became active
      */
-    public void instantiateDependents(Enrollment enrollment, StepInstance completedStepInstance,
-                                      SlaThresholdReader.SlaThresholds completedThresholds) {
+    public void instantiateDependents(Enrollment enrollment, StepInstance completedStepInstance) {
         PlanDefinitionParser.DependencyGraph graph = enrollment.protocol().dependencyGraph();
 
         // after-start: offset from when the prerequisite became active (its scheduled due date)
         // after-end / after (default): offset from when the prerequisite completed (completedAt)
+        // The scheduled due date is read from the SLA schedule. Completion adds only a MET row to it,
+        // which the reader skips, so it reads the same before and after the completion.
+        SlaThresholdReader.SlaThresholds completedThresholds =
+                slaThresholdReader.getThresholds(completedStepInstance.getId());
         OffsetDateTime startedAt = completedThresholds.dueDate() != null
                 ? completedThresholds.dueDate()
                 : completedStepInstance.getCompletedAt();

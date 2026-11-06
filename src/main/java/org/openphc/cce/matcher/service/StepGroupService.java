@@ -268,9 +268,8 @@ public class StepGroupService {
      */
     private static boolean awaitsEntryStep(Enrollment enrollment, PlanDefinitionParser.GroupMetadata groupMetadata,
                                            StepGroupInstance groupInstance) {
-        return enrollment.stepInstances().stream()
-                .anyMatch(stepInstance -> groupMetadata.entryStepId().equals(stepInstance.getActionId())
-                        && stepInstance.getStepStatus() == StepStatus.NOT_STARTED
+        return enrollment.stepInstancesOf(groupMetadata.entryStepId()).stream()
+                .anyMatch(stepInstance -> stepInstance.getStepStatus() == StepStatus.NOT_STARTED
                         && StepInstanceScope.isInside(stepInstance.getStepGroupInstance(), groupInstance));
     }
 
