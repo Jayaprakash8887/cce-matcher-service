@@ -2,9 +2,9 @@
   "resourceType": "PlanDefinition",
   "id": "emr-service-protocol",
   "url": "http://openphc.org/PlanDefinition/emr-service-protocol",
-  "version": "2.0.0",
+  "version": "1.0.0",
   "name": "EmrServiceProtocol",
-  "title": "EMR Service Screening & Management Protocol",
+  "title": "Facility service journey",
   "status": "active",
   "date": "2026-11-05",
   "description": "Tracks each outpatient visit from the Ebuzima HIE as a step group. A visit starts at nursing-station check-in (VISIT_ENCOUNTER) and holds vitals and one or more clinical consultations (CONSULTATION_ENCOUNTER). Each consultation holds chief complaints, history, laboratory order and results, diagnosis, treatment and referral. Mandatory: vitals one day after check-in, a consultation one day after vitals, and a diagnosis one day after each consultation. Designed to match CloudEvents from the OpenHIM mediator carrying FHIR R4 resources.",
@@ -483,7 +483,7 @@
               ],
               "relatedAction": [
                 {
-                  "actionId": "diagnosis",
+                  "actionId": "treatment",
                   "relationship": "after-end"
                 }
               ]
