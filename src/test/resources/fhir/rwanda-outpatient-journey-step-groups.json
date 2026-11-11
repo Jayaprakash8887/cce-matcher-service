@@ -3,11 +3,11 @@
   "id": "emr-service-protocol",
   "url": "http://openphc.org/PlanDefinition/emr-service-protocol",
   "version": "1.0.0",
-  "name": "EmrServiceProtocol",
-  "title": "Facility service journey",
+  "name": "RwandaHealthCenterServiceProtocol",
+  "title": "Rwanda Health Center Patient Journey",
   "status": "active",
   "date": "2026-11-05",
-  "description": "Tracks each outpatient visit from the Ebuzima HIE as a step group. A visit starts at nursing-station check-in (VISIT_ENCOUNTER) and holds vitals and one or more clinical consultations (CONSULTATION_ENCOUNTER). Each consultation holds chief complaints, history, laboratory order and results, diagnosis, treatment and referral. Mandatory: vitals one day after check-in, a consultation one day after vitals, and a diagnosis one day after each consultation. Designed to match CloudEvents from the OpenHIM mediator carrying FHIR R4 resources.",
+  "description": "The service protocol for Rwanda's 550+ health centers. It tracks each outpatient visit as a step group, whichever health center EMR records it. A visit starts at nursing-station check-in (VISIT_ENCOUNTER) and holds vitals and one or more clinical consultations (CONSULTATION_ENCOUNTER). Each consultation holds chief complaints, history, laboratory order and results, diagnosis, treatment and referral. Mandatory: vitals one day after check-in, a consultation one day after vitals, and a diagnosis one day after each consultation. Its triggers match FHIR R4 resources.",
   "action": [
     {
       "id": "outpatient-visit",
@@ -36,7 +36,7 @@
         {
           "id": "visit-encounter",
           "title": "Patient Visit",
-          "description": "Nursing-station check-in, and the entry step of the visit group: each one starts a new visit. Matches Encounter with type display VISIT_ENCOUNTER (display-only coding: Ebuzima payloads have no code in type[]). Optional, so a visit whose check-in is missing is not backfilled with one.",
+          "description": "Nursing-station check-in, and the entry step of the visit group: each one starts a new visit. Matches Encounter with type display VISIT_ENCOUNTER (display-only coding: an EMR may send no code in type[]). Optional, so a visit whose check-in is missing is not backfilled with one.",
           "type": {
             "coding": [
               {
@@ -289,7 +289,7 @@
             {
               "id": "lab-order",
               "title": "Laboratory Order",
-              "description": "Lab test ordered by clinician. Matches any ServiceRequest (F1 scenario). Ebuzima ServiceRequest payloads have non-standard category structure (object instead of array), so only resource-type matching is used.",
+              "description": "Lab test ordered by clinician. Matches any ServiceRequest (F1 scenario). An EMR may send a non-standard category structure (an object instead of an array), so only resource-type matching is used.",
               "type": {
                 "coding": [
                   {
@@ -419,7 +419,7 @@
             {
               "id": "treatment",
               "title": "Treatment Prescription",
-              "description": "Medication prescribed. Matches any MedicationRequest (F1 scenario). Ebuzima payloads use medicationCodeableConcept which is not in the standard extraction paths, so only resource-type matching is used. Expected medications: CAPTOPRIL 25MG (C09AA0101E), METFORMIN 500MG (A10BA0201E).",
+              "description": "Medication prescribed. Matches any MedicationRequest (F1 scenario). An EMR may send medicationCodeableConcept, which is not in the standard extraction paths, so only resource-type matching is used. Expected medications: CAPTOPRIL 25MG (C09AA0101E), METFORMIN 500MG (A10BA0201E).",
               "type": {
                 "coding": [
                   {
