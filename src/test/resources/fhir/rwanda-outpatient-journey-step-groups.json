@@ -25,11 +25,7 @@
       "extension": [
         {
           "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",
-          "valueCode": "entry-step"
-        },
-        {
-          "url": "http://openphc.org/fhir/StructureDefinition/cycle-entry-step",
-          "valueId": "visit-encounter"
+          "valueCode": "calendar-day"
         }
       ],
       "action": [
@@ -124,9 +120,9 @@
           ]
         },
         {
-          "id": "clinical-consultation",
+          "id": "consultation",
           "title": "Clinical Consultation",
-          "description": "One consultation. It repeats by entry step: each CONSULTATION_ENCOUNTER starts a new consultation, so a patient seen twice in one visit gets two. The first consultation of a visit is expected one day after vitals (the consultation step's relatedAction), so a visit with no consultation is reported.",
+          "description": "Clinical consultation encounter, and the entry step of the consultation group. Matches Encounter with type display CONSULTATION_ENCOUNTER. Expected one day after vitals; missed one day after that.",
           "type": {
             "coding": [
               {
@@ -135,71 +131,47 @@
               }
             ]
           },
-          "groupingBehavior": "logical-group",
+          "requiredBehavior": "must",
           "extension": [
             {
-              "url": "http://openphc.org/fhir/StructureDefinition/cycle-boundary",
-              "valueCode": "entry-step"
-            },
+              "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
+              "valueInteger": 1
+            }
+          ],
+          "trigger": [
             {
-              "url": "http://openphc.org/fhir/StructureDefinition/cycle-entry-step",
-              "valueId": "consultation"
+              "data": [
+                {
+                  "type": "Encounter",
+                  "codeFilter": [
+                    {
+                      "code": [
+                        {
+                          "display": "CONSULTATION_ENCOUNTER"
+                        }
+                      ],
+                      "path": "type"
+                    }
+                  ]
+                }
+              ],
+              "name": "consultation-trigger",
+              "type": "named-event"
+            }
+          ],
+          "relatedAction": [
+            {
+              "actionId": "vitals-recording",
+              "relationship": "after-end",
+              "offsetDuration": {
+                "value": 1,
+                "unit": "d",
+                "system": "http://unitsofmeasure.org",
+                "code": "d"
+              }
             }
           ],
           "action": [
-            {
-              "id": "consultation",
-              "title": "Clinical Consultation",
-              "description": "Clinical consultation encounter, and the entry step of the consultation group. Matches Encounter with type display CONSULTATION_ENCOUNTER. Expected one day after vitals; missed one day after that.",
-              "type": {
-                "coding": [
-                  {
-                    "system": "http://openphc.org/fhir/CodeSystem/action-type",
-                    "code": "step"
-                  }
-                ]
-              },
-              "requiredBehavior": "must",
-              "extension": [
-                {
-                  "url": "http://openphc.org/fhir/StructureDefinition/tolerance-days",
-                  "valueInteger": 1
-                }
-              ],
-              "trigger": [
-                {
-                  "data": [
-                    {
-                      "type": "Encounter",
-                      "codeFilter": [
-                        {
-                          "code": [
-                            {
-                              "display": "CONSULTATION_ENCOUNTER"
-                            }
-                          ],
-                          "path": "type"
-                        }
-                      ]
-                    }
-                  ],
-                  "name": "consultation-trigger",
-                  "type": "named-event"
-                }
-              ],
-              "relatedAction": [
-                {
-                  "actionId": "vitals-recording",
-                  "relationship": "after-end",
-                  "offsetDuration": {
-                    "value": 1,
-                    "unit": "d",
-                    "system": "http://unitsofmeasure.org",
-                    "code": "d"
-                  }
-                }
-              ]
-            },
             {
               "id": "chief-complaints",
               "title": "Chief Complaints",
@@ -490,6 +462,7 @@
             }
           ]
         }
+        
       ]
     }
   ]
