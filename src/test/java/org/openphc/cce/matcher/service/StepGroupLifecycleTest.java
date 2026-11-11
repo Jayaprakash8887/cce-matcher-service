@@ -1113,13 +1113,15 @@ class StepGroupLifecycleTest {
 
     /**
      * The Rwanda outpatient protocol written with step groups
-     * ({@code fhir/rwanda-outpatient-journey-step-groups.json}): an outpatient visit repeating by its check-in,
-     * holding vitals and a consultation group repeating by its consultation encounter.
+     * ({@code fhir/rwanda-outpatient-journey-step-groups.json}): an outpatient visit, one per calendar day,
+     * holding a check-in, vitals and a consultation. The consultation is a step, with chief complaints,
+     * history, lab order and results, diagnosis, treatment and referral under it.
      */
     @Nested
     class RwandaOutpatientProtocol {
 
         private static final OffsetDateTime DAY_1 = T0;
+        private static final OffsetDateTime DAY_4 = T0.plusDays(3);
         private static final OffsetDateTime DAY_15 = T0.plusDays(14);
 
         @BeforeEach
@@ -1140,8 +1142,14 @@ class StepGroupLifecycleTest {
             return cyclesOf("outpatient-visit", null).get(cycleIndex);
         }
 
-        private StepGroupInstance consultation(StepGroupInstance visit, int cycleIndex) {
-            return cyclesOf("clinical-consultation", visit).get(cycleIndex);
+        private List<StepInstance> stepInstancesIn(StepGroupInstance visit, String actionId) {
+            return rowsFor(actionId).stream().filter(s -> visit.getId().equals(groupInstanceIdOf(s))).toList();
+        }
+
+        private void consultationOnDay1() {
+            record("visit-encounter", DAY_1);
+            record("vitals-recording", DAY_1.plusMinutes(20));
+            record("consultation", DAY_1.plusHours(1));
         }
 
         @Test
@@ -1152,74 +1160,84 @@ class StepGroupLifecycleTest {
             record("vitals-recording", DAY_1.plusMinutes(20));
             StepInstance awaitedConsultation = rowsFor("consultation").get(0);
             assertEquals(StepStatus.NOT_STARTED, awaitedConsultation.getStepStatus(),
-                    "a visit with no consultation is reported: the first one is awaited after vitals");
+                    "a visit with no consultation is reported: it is awaited after vitals");
             assertEquals(DAY_1.plusMinutes(20).plusDays(1), awaitedConsultation.getDueDate());
 
             record("consultation", DAY_1.plusHours(1));
-            assertEquals(1, cyclesOf("clinical-consultation", visit(0)).size(), "it completes the awaited one");
+            assertEquals(1, rowsFor("consultation").size(), "it completes the awaited one");
             assertEquals(DAY_1.plusHours(1).plusDays(1), rowsFor("diagnosis").get(0).getDueDate(),
-                    "a diagnosis is expected after every consultation, with or without a lab test");
+                    "a diagnosis is expected after the consultation, with or without a lab test");
         }
 
         @Test
-        void labResultsDaysLater_stayInTheirVisitAndConsultation() {
-            record("visit-encounter", DAY_1);
-            record("vitals-recording", DAY_1.plusMinutes(20));
-            record("consultation", DAY_1.plusHours(1));
+        void eventsLaterThatDay_joinThatDaysVisit() {
+            consultationOnDay1();
             record("lab-order", DAY_1.plusHours(2));
+            record("lab-results", DAY_1.plusHours(6));
+            record("diagnosis", DAY_1.plusHours(7));
 
-            record("lab-results", DAY_1.plusDays(3));
-            record("diagnosis", DAY_1.plusDays(3).plusHours(1));
-
-            assertEquals(1, cyclesOf("outpatient-visit", null).size(), "no new visit without a check-in");
-            assertEquals(consultation(visit(0), 0).getId(), groupInstanceIdOf(rowsFor("lab-results").get(0)));
+            assertEquals(1, cyclesOf("outpatient-visit", null).size());
+            assertEquals(1, stepInstancesIn(visit(0), "lab-results").size());
             assertEquals(1, rowsFor("diagnosis").size(), "the awaited diagnosis is completed, not added to");
             assertEquals(StepStatus.COMPLETED, rowsFor("diagnosis").get(0).getStepStatus());
         }
 
         @Test
-        void aSecondConsultationInAVisit_isItsOwnCycle_withItsOwnDiagnosis() {
-            record("visit-encounter", DAY_1);
-            record("vitals-recording", DAY_1.plusMinutes(20));
-            record("consultation", DAY_1.plusHours(1));
+        void labResultsOnALaterDay_openThatDaysVisit_andTheFirstVisitsDiagnosisStaysAwaited() {
+            consultationOnDay1();
+            record("lab-order", DAY_1.plusHours(2));
+
+            record("lab-results", DAY_4);
+            record("diagnosis", DAY_4.plusHours(1));
+
+            assertEquals(2, cyclesOf("outpatient-visit", null).size(), "a new day is a new visit");
+            assertEquals(1, stepInstancesIn(visit(1), "lab-results").size());
+            assertEquals(StepStatus.COMPLETED, stepInstancesIn(visit(1), "diagnosis").get(0).getStepStatus());
+            assertEquals(StepStatus.NOT_STARTED, stepInstancesIn(visit(0), "diagnosis").get(0).getStepStatus(),
+                    "the first visit's diagnosis is still awaited, so it will be missed");
+            assertEquals(StepStatus.NOT_STARTED, stepInstancesIn(visit(1), "vitals-recording").get(0).getStepStatus(),
+                    "the new visit's mandatory steps are backfilled");
+            assertEquals(StepStatus.NOT_STARTED, stepInstancesIn(visit(1), "consultation").get(0).getStepStatus());
+        }
+
+        @Test
+        void aSecondConsultationThatDay_joinsTheSameVisit_withOneDiagnosis() {
+            consultationOnDay1();
             record("diagnosis", DAY_1.plusHours(2));
 
             record("consultation", DAY_1.plusHours(5));
 
-            assertEquals(2, cyclesOf("clinical-consultation", visit(0)).size());
-            StepInstance secondDiagnosis = rowsFor("diagnosis").get(1);
-            assertEquals(consultation(visit(0), 1).getId(), groupInstanceIdOf(secondDiagnosis));
-            assertEquals(DAY_1.plusHours(5).plusDays(1), secondDiagnosis.getDueDate());
+            assertEquals(1, cyclesOf("outpatient-visit", null).size());
+            assertEquals(2, stepInstancesIn(visit(0), "consultation").size());
+            assertEquals(1, rowsFor("diagnosis").size(), "no second diagnosis is expected");
         }
 
         @Test
-        void eachCheckIn_startsANewVisit_withItsOwnVitalsAndConsultation() {
-            record("visit-encounter", DAY_1);
-            record("vitals-recording", DAY_1.plusMinutes(20));
-            record("consultation", DAY_1.plusHours(1));
+        void eachDay_startsANewVisit_withItsOwnVitalsAndConsultation() {
+            consultationOnDay1();
             record("diagnosis", DAY_1.plusHours(2));
 
             record("visit-encounter", DAY_15);
             record("vitals-recording", DAY_15.plusMinutes(20));
 
             assertEquals(2, cyclesOf("outpatient-visit", null).size());
-            assertEquals(DAY_15.plusDays(1), rowsFor("vitals-recording").get(1).getDueDate());
-            StepInstance awaitedConsultation = rowsFor("consultation").get(1);
-            assertEquals(consultation(visit(1), 0).getId(), groupInstanceIdOf(awaitedConsultation));
+            assertEquals(DAY_15.plusDays(1), stepInstancesIn(visit(1), "vitals-recording").get(0).getDueDate());
+            StepInstance awaitedConsultation = stepInstancesIn(visit(1), "consultation").get(0);
+            assertEquals(StepStatus.NOT_STARTED, awaitedConsultation.getStepStatus());
             assertEquals(DAY_15.plusMinutes(20).plusDays(1), awaitedConsultation.getDueDate());
         }
 
         @Test
-        void vitalsBeforeTheCheckIn_joinTheLatestVisit() {
+        void vitalsBeforeTheCheckIn_openThatDaysVisit_andTheCheckInJoinsIt() {
             record("visit-encounter", DAY_1);
             record("vitals-recording", DAY_1.plusMinutes(20));
 
             record("vitals-recording", DAY_15);       // sent before that day's check-in
             record("visit-encounter", DAY_15.plusMinutes(5));
 
-            assertEquals(visit(0).getId(), groupInstanceIdOf(rowsFor("vitals-recording").get(1)),
-                    "without its check-in first, an event can only join the latest visit");
             assertEquals(2, cyclesOf("outpatient-visit", null).size());
+            assertEquals(StepStatus.COMPLETED, stepInstancesIn(visit(1), "vitals-recording").get(0).getStepStatus());
+            assertEquals(StepStatus.COMPLETED, stepInstancesIn(visit(1), "visit-encounter").get(0).getStepStatus());
         }
     }
 

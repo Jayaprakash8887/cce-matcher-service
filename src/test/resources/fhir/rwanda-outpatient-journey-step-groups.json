@@ -7,12 +7,12 @@
   "title": "Rwanda Health Center Patient Journey",
   "status": "active",
   "date": "2026-11-05",
-  "description": "The service protocol for Rwanda's 550+ health centers. It tracks each outpatient visit as a step group, whichever health center EMR records it. A visit starts at nursing-station check-in (VISIT_ENCOUNTER) and holds vitals and one or more clinical consultations (CONSULTATION_ENCOUNTER). Each consultation holds chief complaints, history, laboratory order and results, diagnosis, treatment and referral. Mandatory: vitals one day after check-in, a consultation one day after vitals, and a diagnosis one day after each consultation. Its triggers match FHIR R4 resources.",
+  "description": "The service protocol for Rwanda's 550+ health centers. It tracks each outpatient visit as a step group, whichever health center EMR records it. A visit is one calendar day. It holds the nursing-station check-in (VISIT_ENCOUNTER), vitals and a clinical consultation (CONSULTATION_ENCOUNTER). The consultation holds chief complaints, history, laboratory order and results, diagnosis, treatment and referral. Mandatory: vitals one day after check-in, a consultation one day after vitals, and a diagnosis one day after the consultation. Its triggers match FHIR R4 resources.",
   "action": [
     {
       "id": "outpatient-visit",
       "title": "Outpatient Visit",
-      "description": "One outpatient visit. It repeats by entry step: each VISIT_ENCOUNTER (nursing-station check-in) starts a new visit, and every other event joins the latest visit. A visit therefore spans the days its lab results and diagnosis take.",
+      "description": "One outpatient visit. It repeats by calendar day: the first event on a new day starts a new visit, and every other event that day joins it. Lab results or a diagnosis recorded on a later day therefore start a new visit.",
       "type": {
         "coding": [
           {
@@ -32,7 +32,7 @@
         {
           "id": "visit-encounter",
           "title": "Patient Visit",
-          "description": "Nursing-station check-in, and the entry step of the visit group: each one starts a new visit. Matches Encounter with type display VISIT_ENCOUNTER (display-only coding: an EMR may send no code in type[]). Optional, so a visit whose check-in is missing is not backfilled with one.",
+          "description": "Nursing-station check-in. Matches Encounter with type display VISIT_ENCOUNTER (display-only coding: an EMR may send no code in type[]). Optional, so a visit whose check-in is missing is not backfilled with one.",
           "type": {
             "coding": [
               {
@@ -122,7 +122,7 @@
         {
           "id": "consultation",
           "title": "Clinical Consultation",
-          "description": "Clinical consultation encounter, and the entry step of the consultation group. Matches Encounter with type display CONSULTATION_ENCOUNTER. Expected one day after vitals; missed one day after that.",
+          "description": "Clinical consultation encounter. Matches Encounter with type display CONSULTATION_ENCOUNTER. Expected one day after vitals; missed one day after that.",
           "type": {
             "coding": [
               {
@@ -292,7 +292,7 @@
                 {
                   "id": "lab-results",
                   "title": "Laboratory Results",
-                  "description": "Lab results returned. Matches Observation with category laboratory. Uses category-path codeFilter to distinguish from vital-signs and survey observations. Nested under lab-order, so the journey shows it as lab-order's sub-step. Nesting is layout only: it is a step of the consultation group like the others.",
+                  "description": "Lab results returned. Matches Observation with category laboratory. Uses category-path codeFilter to distinguish from vital-signs and survey observations. Nested under lab-order, so the journey shows it as lab-order's sub-step. Nesting is layout only: it is a step of the visit like the others.",
                   "type": {
                     "coding": [
                       {
@@ -337,7 +337,7 @@
             {
               "id": "diagnosis",
               "title": "Clinical Diagnosis",
-              "description": "Diagnosis recorded. Matches Condition with clinicalStatus active. Expected one day after the consultation; missed one day after that. It follows the consultation, not the lab results, so it is expected in every consultation, with or without a lab test.",
+              "description": "Diagnosis recorded. Matches Condition with clinicalStatus active. Expected one day after the consultation; missed one day after that. It follows the consultation, not the lab results, so it is expected with or without a lab test.",
               "type": {
                 "coding": [
                   {
@@ -462,7 +462,6 @@
             }
           ]
         }
-        
       ]
     }
   ]
